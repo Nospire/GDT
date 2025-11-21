@@ -50,13 +50,14 @@ prompt_pass() {
   fi
 }
 
-# 1) sudo уже активен?
+# sudo уже активен?
 if sudo -n true 2>/dev/null; then
+  echo "[STATE] active"
   msg_info "Режим sudo уже активен." "sudo is already active."
   exit 0
 fi
 
-# 2) Есть ли у пользователя пароль?
+# Есть ли у пользователя пароль?
 PASS_STATUS=$(passwd -S "$USER_NAME" 2>/dev/null | awk '{print $2}')
 NO_PASS=0
 if [[ "$PASS_STATUS" == "NP" || -z "$PASS_STATUS" ]]; then
@@ -64,10 +65,15 @@ if [[ "$PASS_STATUS" == "NP" || -z "$PASS_STATUS" ]]; then
 fi
 
 if (( NO_PASS )); then
-  # --- Новый пароль ---
+  # --- Пароля нет ---
+  echo "[STATE] no_password"
   msg_info \
-    "У пользователя ${USER_NAME} ещё нет пароля. Задайте пароль для sudo.\nЗапомните его — он понадобится для системных операций." \
-    "User ${USER_NAME} has no password yet. Set a password for sudo.\nRemember it — it will be required for system operations."
+"У пользователя ${USER_NAME} ещё нет пароля.
+Задайте пароль для sudo.
+Запомните его — он понадобится для системных операций." \
+"User ${USER_NAME} has no password yet.
+Set a password for sudo.
+Remember it — it will be required for system operations."
 
   while true; do
     NEW_PASS=$(prompt_pass "Задайте новый пароль sudo:" "Set new sudo password:")
@@ -87,9 +93,9 @@ if (( NO_PASS )); then
     fi
 
     if printf '%s\n%s\n' "$NEW_PASS" "$NEW_PASS" | passwd "$USER_NAME" >/dev/null 2>&1; then
-      # Проверяем sudo с новым паролем
       if printf '%s\n' "$NEW_PASS" | sudo -S -k true >/dev/null 2>&1; then
         sudo -v >/dev/null 2>&1 || true
+        echo "[STATE] active"
         msg_info "Пароль задан, режим sudo активирован." "Password set, sudo mode activated."
         exit 0
       else
@@ -101,11 +107,12 @@ if (( NO_PASS )); then
     fi
   done
 else
-  # --- Пароль уже есть, просто спросить и прогреть sudo ---
+  # --- Пароль уже есть ---
+  echo "[STATE] has_password"
   TRIES=3
   msg_info \
-    "Введите пароль sudo (пользователь ${USER_NAME})." \
-    "Enter sudo password (user ${USER_NAME})."
+"Введите пароль sudo (пользователь ${USER_NAME})." \
+"Enter sudo password (user ${USER_NAME})."
 
   for ((i=1; i<=TRIES; i++)); do
     PASS=$(prompt_pass "Введите пароль sudo:" "Enter sudo password:")
@@ -113,6 +120,7 @@ else
 
     if printf '%s\n' "$PASS" | sudo -S -k true >/dev/null 2>&1; then
       sudo -v >/dev/null 2>&1 || true
+      echo "[STATE] active"
       msg_info "Режим sudo активирован." "Sudo mode activated."
       exit 0
     else
