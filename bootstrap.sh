@@ -12,10 +12,14 @@ BIN_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases/latest/downlo
 ENGINE_PATH="engine.sh"
 ENGINE_URL="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/${ENGINE_PATH}"
 
+SUDO_HELPER_PATH="sudo-helper.sh"
+SUDO_HELPER_URL="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/${SUDO_HELPER_PATH}"
+
 BASE_DIR="${HOME}/.scripts"
 APP_DIR="${BASE_DIR}/geekcom-deck-tools"
 LOCAL_BIN="${APP_DIR}/${BIN_NAME}"
 LOCAL_ENGINE="${APP_DIR}/engine.sh"
+LOCAL_SUDO_HELPER="${APP_DIR}/sudo-helper.sh"
 
 # === LOGIC ===
 
@@ -33,6 +37,11 @@ echo "[STEP] Downloading engine from: ${ENGINE_URL}"
 curl -fsSL -o "${LOCAL_ENGINE}.tmp" "${ENGINE_URL}"
 mv "${LOCAL_ENGINE}.tmp" "${LOCAL_ENGINE}"
 chmod +x "${LOCAL_ENGINE}"
+
+echo "[STEP] Downloading sudo helper from: ${SUDO_HELPER_URL}"
+curl -fsSL -o "${LOCAL_SUDO_HELPER}.tmp" "${SUDO_HELPER_URL}"
+mv "${LOCAL_SUDO_HELPER}.tmp" "${LOCAL_SUDO_HELPER}"
+chmod +x "${LOCAL_SUDO_HELPER}"
 
 echo "[OK] Geekcom Deck Tools updated."
 echo "[RUN] Starting GUI..."
