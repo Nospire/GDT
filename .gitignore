@@ -1,0 +1,11 @@
+# Qt / C++ build junk (на будущее, если сюда что-то прилетит)
+*.o
+*.obj
+*.so
+*.a
+*.dll
+*.exe
+Makefile
+moc_*
+qrc_*
+build-*/
