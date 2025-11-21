@@ -26,7 +26,6 @@ if [[ -z "$ACTION" ]]; then
 fi
 
 # --- Проверка активного sudo (без запроса пароля) ---
-
 if ! sudo -n true 2>/dev/null; then
   say "[ERR] sudo не активен. Сначала нажмите кнопку sudo внизу и введите пароль." \
       "[ERR] sudo is not active. Press the sudo button below and enter your password first."
@@ -58,8 +57,11 @@ case "$ACTION" in
         "[STEP] Would install/update Geekcom antizapret here."
     ;;
   *)
-    say "[ERR] Неизвестное действие: ${ACTION}" \
-        "[ERR] Unknown ACTION: ${ACTION}" >&2
+    if [[ "$UI_LANG" == "ru" ]]; then
+      echo "[ERR] Неизвестное действие: ${ACTION}" >&2
+    else
+      echo "[ERR] Unknown ACTION: ${ACTION}" >&2
+    fi
     exit 1
     ;;
 esac

@@ -18,7 +18,7 @@ SUDO_HELPER_URL="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}
 BASE_DIR="${HOME}/.scripts"
 APP_DIR="${BASE_DIR}/geekcom-deck-tools"
 LOCAL_BIN="${APP_DIR}/${BIN_NAME}"
-LOCAL_ENGINE="${APP_DIR}/engine.sh"
+LOCAL_ENGINE="${APP_DIR}/engine.sh}"
 LOCAL_SUDO_HELPER="${APP_DIR}/sudo-helper.sh"
 
 # === LOGIC ===
