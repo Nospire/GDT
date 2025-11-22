@@ -19,9 +19,6 @@ FINISH_SENT=0
 
 mkdir -p "$CFG_DIR"
 
-# Пароль sudo, прокинутый из GUI (если есть)
-SUDO_PASS="${GDT_SUDO_PASS:-}"
-
 # ========= УТИЛИТЫ ЛОКАЛИЗАЦИИ =========
 
 say() {
@@ -56,22 +53,11 @@ need_cmd() {
   fi
 }
 
-# Обёртка над sudo: либо используем пароль из GDT_SUDO_PASS,
-# либо пытаемся работать в режиме NOPASSWD через sudo -n
-run_sudo() {
-  if [[ -n "$SUDO_PASS" ]]; then
-    # пароль не логируем и не печатаем никуда
-    printf '%s\n' "$SUDO_PASS" | sudo -S -p '' "$@"
-  else
-    sudo -n "$@"
-  fi
-}
-
 flush_dns() {
   if command -v resolvectl >/dev/null 2>&1; then
-    run_sudo resolvectl flush-caches || true
+    sudo resolvectl flush-caches || true
   elif command -v systemd-resolve >/dev/null 2>&1; then
-    run_sudo systemd-resolve --flush-caches || true
+    sudo systemd-resolve --flush-caches || true
   fi
 }
 
@@ -112,8 +98,8 @@ cleanup() {
   if (( TUNNEL_UP )); then
     log_info "Отключаем туннель (wg-quick down)..." \
              "Bringing tunnel down (wg-quick down)..."
-    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    run_sudo ip link del client >/dev/null 2>&1 || true
+    sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    sudo ip link del client >/dev/null 2>&1 || true
     TUNNEL_UP=0
   fi
 
@@ -151,15 +137,12 @@ fi
 need_cmd curl
 need_cmd wg-quick
 need_cmd ping
-need_cmd sudo
 
-# Если пароль не прокинут, пробуем режим NOPASSWD через sudo -n
-if [[ -z "$SUDO_PASS" ]]; then
-  if ! sudo -n true 2>/dev/null; then
-    log_err "sudo не активен и пароль не передан. Сначала нажмите кнопку sudo внизу и введите пароль." \
-            "sudo is not active and no password was provided. Press the sudo button below and enter your password first."
-    exit 1
-  fi
+# Проверка sudo без запроса пароля
+if ! sudo -n true 2>/dev/null; then
+  log_err "sudo не активен. Сначала нажмите кнопку sudo внизу и введите пароль." \
+          "sudo is not active. Press the sudo button below and enter your password first."
+  exit 1
 fi
 
 log_info "Движок Geekcom Deck Tools запущен." \
@@ -173,8 +156,10 @@ log_info "Базовый URL оркестратора: ${BASE_URL}" \
 
 request_initial_config() {
   local reason="$1"
-  log_info "Запрашиваем конфигурацию VPN через /vpn/request (reason=${reason})..." \
-           "Requesting VPN config via /vpn/request (reason=${reason})..."
+
+  >&2 log_info \
+    "Запрашиваем конфигурацию VPN через /vpn/request (reason=${reason})..." \
+    "Requesting VPN config via /vpn/request (reason=${reason})..."
 
   local res
   res=$(
@@ -188,23 +173,27 @@ request_initial_config() {
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
 
   if [[ -z "$SESSION_ID" || -z "$config_text" ]]; then
-    log_err "Не удалось получить session_id или config_text от сервиса." \
-            "Failed to get session_id or config_text from the service."
-    echo "$res"
+    >&2 log_err \
+      "Не удалось получить session_id или config_text от сервиса." \
+      "Failed to get session_id or config_text from the service."
+    >&2 echo "$res"
     return 1
   fi
 
   HAVE_SESSION=1
-  log_info "Получен session_id=${SESSION_ID}" \
-           "Got session_id=${SESSION_ID}"
+  >&2 log_info \
+    "Получен session_id=${SESSION_ID}" \
+    "Got session_id=${SESSION_ID}"
 
+  # В stdout — ТОЛЬКО конфиг, без логов
   printf '%s\n' "$config_text"
   return 0
 }
 
 request_next_config() {
-  log_info "Запрашиваем следующую конфигурацию через /vpn/report-broken..." \
-           "Requesting next configuration via /vpn/report-broken..."
+  >&2 log_info \
+    "Запрашиваем следующую конфигурацию через /vpn/report-broken..." \
+    "Requesting next configuration via /vpn/report-broken..."
 
   local res
   res=$(
@@ -217,19 +206,22 @@ request_next_config() {
   new_sid="$(printf '%s' "$res" | json_get new_session_id || true)"
   if [[ -n "$new_sid" ]]; then
     SESSION_ID="$new_sid"
-    log_info "Обновлён session_id=${SESSION_ID}" \
-             "Updated session_id=${SESSION_ID}"
+    >&2 log_info \
+      "Обновлён session_id=${SESSION_ID}" \
+      "Updated session_id=${SESSION_ID}"
   fi
 
   local config_text
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
   if [[ -z "$config_text" ]]; then
-    log_err "Сервис не вернул config_text. Возможно, лимит попыток исчерпан." \
-            "Service did not return config_text. Max attempts may be exceeded."
-    echo "$res"
+    >&2 log_err \
+      "Сервис не вернул config_text. Возможно, лимит попыток исчерпан." \
+      "Service did not return config_text. Max attempts may be exceeded."
+    >&2 echo "$res"
     return 1
   fi
 
+  # В stdout — ТОЛЬКО конфиг
   printf '%s\n' "$config_text"
   return 0
 }
@@ -272,15 +264,15 @@ ensure_vpn_up() {
     print_endpoint_from_config < "$WG_CONF" || true
 
     # Чистим хвосты от прошлых запусков
-    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    run_sudo ip link del client >/dev/null 2>&1 || true
+    sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    sudo ip link del client >/dev/null 2>&1 || true
 
     log_info "Поднимаем туннель: sudo wg-quick up ${WG_CONF}" \
              "Bringing tunnel up: sudo wg-quick up ${WG_CONF}"
-    if ! run_sudo wg-quick up "$WG_CONF"; then
+    if ! sudo wg-quick up "$WG_CONF"; then
       log_err "Не удалось поднять туннель на этой конфигурации." \
               "Failed to bring tunnel up with this configuration."
-      run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+      sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
       ((attempt++))
@@ -306,7 +298,7 @@ ensure_vpn_up() {
     else
       log_err "Пинг 8.8.8.8 не прошёл. Пробуем следующую конфигурацию..." \
               "Ping to 8.8.8.8 failed. Trying next configuration..."
-      run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+      sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
       ((attempt++))
@@ -334,8 +326,8 @@ finish_session() {
   if (( TUNNEL_UP )); then
     log_info "Отключаем туннель (wg-quick down)..." \
              "Bringing tunnel down (wg-quick down)..."
-    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    run_sudo ip link del client >/dev/null 2>&1 || true
+    sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    sudo ip link del client >/dev/null 2>&1 || true
     TUNNEL_UP=0
   fi
 
