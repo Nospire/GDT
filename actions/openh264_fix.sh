@@ -13,15 +13,11 @@ fi
 
 echo "[INFO] Ensuring OpenH264 is not masked in Flatpak (system and user)..."
 
-# Сначала пробуем снять system-маски через sudo (sudo уже должен быть активен)
-if sudo -n true 2>/dev/null; then
-  sudo flatpak mask --system --remove "${APP_ID}"        >/dev/null 2>&1 || true
-  sudo flatpak mask --system --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
-else
-  echo "[WARN] sudo is not active; cannot remove system-level masks, only user-level." >&2
-fi
+# Снимаем system-маски через sudo (engine уже гарантировал активный sudo)
+sudo flatpak mask --system --remove "${APP_ID}"        >/dev/null 2>&1 || true
+sudo flatpak mask --system --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
 
-# Потом снимаем user-маски — это не требует root
+# На всякий случай чистим user-маски (они sudo не требуют)
 flatpak mask --user --remove "${APP_ID}"        >/dev/null 2>&1 || true
 flatpak mask --user --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
 
@@ -75,19 +71,10 @@ echo "[INFO] Latest OpenH264 branch: ${latest_branch}"
 ref="${APP_ID}//${latest_branch}"
 echo "[INFO] Installing ref: ${ref}"
 
-# В норме sudo уже активен (движок это проверил), но подстрахуемся
-if sudo -n true 2>/dev/null; then
-  if sudo flatpak install -y --system "$ref"; then
-    echo "[OK] Installed to system flatpak."
-  else
-    echo "[WARN] System install failed, trying user install..."
-    flatpak install -y --user "$ref"
-    echo "[OK] Installed to user flatpak."
-  fi
-else
-  echo "[WARN] sudo -n failed; installing into user flatpak only..."
-  flatpak install -y --user "$ref"
-fi
+# Ставим/обновляем ТОЛЬКО в system-flatpak, без фолбэка в user
+sudo flatpak install -y --system "$ref"
+
+echo "[OK] Installed to system flatpak."
 
 echo "[INFO] OpenH264 runtimes currently installed:"
 flatpak list | grep -i openh264 || echo "[INFO] No openh264 runtimes found in flatpak list."
