@@ -12,12 +12,19 @@ if ! command -v flatpak >/dev/null 2>&1; then
 fi
 
 echo "[INFO] Ensuring OpenH264 is not masked in Flatpak (system and user)..."
-# Снимаем маски для всего org.freedesktop.Platform.openh264
-flatpak mask --remove "${APP_ID}"       >/dev/null 2>&1 || true
-flatpak mask --user --remove "${APP_ID}" >/dev/null 2>&1 || true
-# На всякий случай чистим возможную маску по конкретной ветке
-flatpak mask --remove "${APP_ID}//2.5.1"       >/dev/null 2>&1 || true
+
+# Сначала пробуем снять system-маски через sudo (sudo уже должен быть активен)
+if sudo -n true 2>/dev/null; then
+  sudo flatpak mask --system --remove "${APP_ID}"        >/dev/null 2>&1 || true
+  sudo flatpak mask --system --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
+else
+  echo "[WARN] sudo is not active; cannot remove system-level masks, only user-level." >&2
+fi
+
+# Потом снимаем user-маски — это не требует root
+flatpak mask --user --remove "${APP_ID}"        >/dev/null 2>&1 || true
 flatpak mask --user --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
+
 echo "[INFO] Flatpak masks (if any) for OpenH264 have been removed."
 
 tmp_err="$(mktemp /tmp/openh264-remote-info.XXXXXX)"
