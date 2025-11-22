@@ -5,15 +5,13 @@ APP_ID="org.freedesktop.Platform.openh264"
 REMOTE="flathub"
 TIMEOUT=20
 
-# Пароль, который GUI кладёт в окружение при запуске engine.sh
+# Пароль sudo от GUI (через engine.sh)
 SUDO_PASS="${GDT_SUDO_PASS:-}"
 
 run_sudo() {
   if [[ -n "$SUDO_PASS" ]]; then
-    # Кормим пароль через stdin, без попытки лезть в TTY
     printf '%s\n' "$SUDO_PASS" | sudo -S -p '' "$@"
   else
-    # Фолбэк, теоретически не должен срабатывать в нормальном сценарии
     sudo "$@"
   fi
 }
@@ -24,20 +22,21 @@ if ! command -v flatpak >/dev/null 2>&1; then
   exit 1
 fi
 
+# Снимаем маски старого «кривого» фикса: system + user
 echo "[INFO] Ensuring OpenH264 is not masked in Flatpak (system and user)..."
-
-# Снимаем system-маски через sudo (через наш run_sudo)
-run_sudo flatpak mask --system --remove "${APP_ID}"        >/dev/null 2>&1 || true
-run_sudo flatpak mask --system --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
-
-# Снимаем user-маски (root не нужен)
-flatpak mask --user --remove "${APP_ID}"        >/dev/null 2>&1 || true
-flatpak mask --user --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
-
+if run_sudo flatpak mask --system --remove "${APP_ID}" >/dev/null 2>&1; then
+  echo "[INFO] Removed system-level mask for ${APP_ID} (if it existed)."
+fi
+if flatpak mask --user --remove "${APP_ID}" >/dev/null 2>&1; then
+  echo "[INFO] Removed user-level mask for ${APP_ID} (if it existed)."
+fi
 echo "[INFO] Flatpak masks (if any) for OpenH264 have been removed."
 
 tmp_err="$(mktemp /tmp/openh264-remote-info.XXXXXX)"
-trap 'rm -f "$tmp_err" || true' EXIT
+cleanup_tmp() {
+  rm -f "$tmp_err" || true
+}
+trap cleanup_tmp EXIT
 
 echo "[INFO] Querying branches list via flatpak remote-info..."
 
@@ -72,22 +71,62 @@ fi
 echo "[INFO] Found branches:"
 printf '       %s\n' $branches
 
-# Фильтруем legacy-рантайм 19.08, если есть нормальные ветки
-filtered="$(printf '%s\n' $branches | grep -v '^19\.08$' || true)"
-if [[ -n "$filtered" ]]; then
-  latest_branch="$(printf '%s\n' "$filtered" | tail -n1)"
-else
-  latest_branch="$(printf '%s\n' $branches | tail -n1)"
+# Ставим всё, кроме явного legacy 19.08
+target_branches=""
+for b in $branches; do
+  if [[ "$b" == "19.08" ]]; then
+    continue
+  fi
+  target_branches+="$b "
+done
+
+# Если осталась только 19.08 — ставим её
+if [[ -z "$target_branches" ]]; then
+  target_branches="$branches"
 fi
 
-echo "[INFO] Latest OpenH264 branch: ${latest_branch}"
-ref="${APP_ID}//${latest_branch}"
-echo "[INFO] Installing ref: ${ref}"
+echo "[INFO] Will install OpenH264 for branches:"
+for b in $target_branches; do
+  echo "       $b"
+done
 
-# Ставим / обновляем только в system-flatpak через run_sudo
-run_sudo flatpak install -y --system "$ref"
+overall_ok=0
 
-echo "[OK] Installed to system flatpak."
+for b in $target_branches; do
+  ref="${APP_ID}//${b}"
+  echo "[INFO] Installing ref: ${ref}"
+
+  installed_ok=0
+
+  # System
+  if run_sudo flatpak install -y --system "$ref"; then
+    installed_ok=1
+    echo "[OK] Installed ${ref} to system flatpak (or it was already installed)."
+  else
+    echo "[WARN] Failed to install ${ref} to system flatpak." >&2
+  fi
+
+  # User (всегда пробуем, даже если system уже есть)
+  if flatpak install -y --user "$ref"; then
+    installed_ok=1
+    echo "[OK] Installed ${ref} to user flatpak (or it was already installed)."
+  else
+    echo "[WARN] Failed to install ${ref} to user flatpak." >&2
+  fi
+
+  if (( installed_ok )); then
+    overall_ok=1
+  else
+    echo "[ERR] ${ref} failed both in system and user scopes." >&2
+  fi
+done
 
 echo "[INFO] OpenH264 runtimes currently installed:"
 flatpak list | grep -i openh264 || echo "[INFO] No openh264 runtimes found in flatpak list."
+
+if (( overall_ok == 0 )); then
+  echo "[ERR] Failed to install any OpenH264 branch in any scope." >&2
+  exit 1
+fi
+
+echo "[INFO] OpenH264 installation/fix completed."
