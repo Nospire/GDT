@@ -21,12 +21,17 @@ if ! command -v steamos-update >/dev/null 2>&1; then
 fi
 
 echo "[INFO] Running 'steamos-update check'..."
-if ! run_sudo steamos-update check; then
+# STDERR steamos-update сразу отправляем в STDOUT, чтобы GUI не ставил [ERR]
+if ! run_sudo steamos-update check 2>&1; then
   echo "[ERR] 'steamos-update check' failed." >&2
   exit 1
 fi
 
 echo "[INFO] Running full 'steamos-update'..."
-run_sudo steamos-update
+# То же самое для основного обновления
+if ! run_sudo steamos-update 2>&1; then
+  echo "[ERR] 'steamos-update' failed." >&2
+  exit 1
+fi
 
 echo "[INFO] SteamOS update command finished."
