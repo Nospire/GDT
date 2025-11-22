@@ -5,22 +5,20 @@ APP_ID="org.freedesktop.Platform.openh264"
 REMOTE="flathub"
 TIMEOUT=20
 
-# Пароль sudo из GUI (если есть)
-SUDO_PASS="${GDT_SUDO_PASS:-}"
-
-run_sudo() {
-  if [[ -n "$SUDO_PASS" ]]; then
-    printf '%s\n' "$SUDO_PASS" | sudo -S -p '' -- "$@"
-  else
-    sudo -n -- "$@"
-  fi
-}
-
 echo "[INFO] Checking for flatpak..."
 if ! command -v flatpak >/dev/null 2>&1; then
   echo "[ERR] flatpak not found. Cannot install OpenH264." >&2
   exit 1
 fi
+
+echo "[INFO] Ensuring OpenH264 is not masked in Flatpak (system and user)..."
+# Снимаем маски для всего org.freedesktop.Platform.openh264
+flatpak mask --remove "${APP_ID}"       >/dev/null 2>&1 || true
+flatpak mask --user --remove "${APP_ID}" >/dev/null 2>&1 || true
+# На всякий случай чистим возможную маску по конкретной ветке
+flatpak mask --remove "${APP_ID}//2.5.1"       >/dev/null 2>&1 || true
+flatpak mask --user --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
+echo "[INFO] Flatpak masks (if any) for OpenH264 have been removed."
 
 tmp_err="$(mktemp /tmp/openh264-remote-info.XXXXXX)"
 trap 'rm -f "$tmp_err" || true' EXIT
@@ -70,17 +68,18 @@ echo "[INFO] Latest OpenH264 branch: ${latest_branch}"
 ref="${APP_ID}//${latest_branch}"
 echo "[INFO] Installing ref: ${ref}"
 
-# В норме sudo уже активен (движок это проверил)
-if run_sudo flatpak install -y --system "$ref"; then
-  echo "[OK] Installed to system flatpak."
-else
-  echo "[WARN] System install failed, trying user install..."
-  if flatpak install -y --user "$ref"; then
-    echo "[OK] Installed to user flatpak."
+# В норме sudo уже активен (движок это проверил), но подстрахуемся
+if sudo -n true 2>/dev/null; then
+  if sudo flatpak install -y --system "$ref"; then
+    echo "[OK] Installed to system flatpak."
   else
-    echo "[ERR] Failed to install OpenH264 both system and user." >&2
-    exit 1
+    echo "[WARN] System install failed, trying user install..."
+    flatpak install -y --user "$ref"
+    echo "[OK] Installed to user flatpak."
   fi
+else
+  echo "[WARN] sudo -n failed; installing into user flatpak only..."
+  flatpak install -y --user "$ref"
 fi
 
 echo "[INFO] OpenH264 runtimes currently installed:"
