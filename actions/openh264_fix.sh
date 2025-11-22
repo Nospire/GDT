@@ -5,6 +5,19 @@ APP_ID="org.freedesktop.Platform.openh264"
 REMOTE="flathub"
 TIMEOUT=20
 
+# Пароль, который GUI кладёт в окружение при запуске engine.sh
+SUDO_PASS="${GDT_SUDO_PASS:-}"
+
+run_sudo() {
+  if [[ -n "$SUDO_PASS" ]]; then
+    # Кормим пароль через stdin, без попытки лезть в TTY
+    printf '%s\n' "$SUDO_PASS" | sudo -S -p '' "$@"
+  else
+    # Фолбэк, теоретически не должен срабатывать в нормальном сценарии
+    sudo "$@"
+  fi
+}
+
 echo "[INFO] Checking for flatpak..."
 if ! command -v flatpak >/dev/null 2>&1; then
   echo "[ERR] flatpak not found. Cannot install OpenH264." >&2
@@ -13,11 +26,11 @@ fi
 
 echo "[INFO] Ensuring OpenH264 is not masked in Flatpak (system and user)..."
 
-# Снимаем system-маски через sudo (engine уже гарантировал активный sudo)
-sudo flatpak mask --system --remove "${APP_ID}"        >/dev/null 2>&1 || true
-sudo flatpak mask --system --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
+# Снимаем system-маски через sudo (через наш run_sudo)
+run_sudo flatpak mask --system --remove "${APP_ID}"        >/dev/null 2>&1 || true
+run_sudo flatpak mask --system --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
 
-# На всякий случай чистим user-маски (они sudo не требуют)
+# Снимаем user-маски (root не нужен)
 flatpak mask --user --remove "${APP_ID}"        >/dev/null 2>&1 || true
 flatpak mask --user --remove "${APP_ID}//2.5.1" >/dev/null 2>&1 || true
 
@@ -71,8 +84,8 @@ echo "[INFO] Latest OpenH264 branch: ${latest_branch}"
 ref="${APP_ID}//${latest_branch}"
 echo "[INFO] Installing ref: ${ref}"
 
-# Ставим/обновляем ТОЛЬКО в system-flatpak, без фолбэка в user
-sudo flatpak install -y --system "$ref"
+# Ставим / обновляем только в system-flatpak через run_sudo
+run_sudo flatpak install -y --system "$ref"
 
 echo "[OK] Installed to system flatpak."
 
