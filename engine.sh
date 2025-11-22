@@ -17,6 +17,9 @@ HAVE_SESSION=0
 TUNNEL_UP=0
 FINISH_SENT=0
 
+# Пароль sudo, который передаёт GUI (если он вообще есть)
+SUDO_PASS="${GDT_SUDO_PASS:-}"
+
 mkdir -p "$CFG_DIR"
 
 # ========= УТИЛИТЫ ЛОКАЛИЗАЦИИ =========
@@ -53,11 +56,22 @@ need_cmd() {
   fi
 }
 
+# Унифицированный sudo: если есть пароль от GUI — используем его,
+# иначе падаем обратно на обычный sudo.
+run_sudo() {
+  if [[ -n "$SUDO_PASS" ]]; then
+    # не пишем пароль в логи, только в stdin sudo
+    printf '%s\n' "$SUDO_PASS" | sudo -S -- "$@"
+  else
+    sudo -- "$@"
+  fi
+}
+
 flush_dns() {
   if command -v resolvectl >/dev/null 2>&1; then
-    sudo resolvectl flush-caches || true
+    run_sudo resolvectl flush-caches || true
   elif command -v systemd-resolve >/dev/null 2>&1; then
-    sudo systemd-resolve --flush-caches || true
+    run_sudo systemd-resolve --flush-caches || true
   fi
 }
 
@@ -98,8 +112,8 @@ cleanup() {
   if (( TUNNEL_UP )); then
     log_info "Отключаем туннель (wg-quick down)..." \
              "Bringing tunnel down (wg-quick down)..."
-    sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    sudo ip link del client >/dev/null 2>&1 || true
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
     TUNNEL_UP=0
   fi
 
@@ -138,8 +152,10 @@ need_cmd curl
 need_cmd wg-quick
 need_cmd ping
 
-# Проверка sudo без запроса пароля
-if ! sudo -n true 2>/dev/null; then
+# Проверка sudo:
+#  - если GUI передал пароль (SUDO_PASS не пустой) — считаем, что можем работать;
+#  - если нет пароля — ведём себя по-старому и требуем активный sudo -n.
+if [[ -z "$SUDO_PASS" ]] && ! sudo -n true 2>/dev/null; then
   log_err "sudo не активен. Сначала нажмите кнопку sudo внизу и введите пароль." \
           "sudo is not active. Press the sudo button below and enter your password first."
   exit 1
@@ -264,15 +280,15 @@ ensure_vpn_up() {
     print_endpoint_from_config < "$WG_CONF" || true
 
     # Чистим хвосты от прошлых запусков
-    sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    sudo ip link del client >/dev/null 2>&1 || true
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
 
-    log_info "Поднимаем туннель: sudo wg-quick up ${WG_CONF}" \
-             "Bringing tunnel up: sudo wg-quick up ${WG_CONF}"
-    if ! sudo wg-quick up "$WG_CONF"; then
+    log_info "Поднимаем туннель: wg-quick up ${WG_CONF}" \
+             "Bringing tunnel up: wg-quick up ${WG_CONF}"
+    if ! run_sudo wg-quick up "$WG_CONF"; then
       log_err "Не удалось поднять туннель на этой конфигурации." \
               "Failed to bring tunnel up with this configuration."
-      sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+      run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
       ((attempt++))
@@ -298,7 +314,7 @@ ensure_vpn_up() {
     else
       log_err "Пинг 8.8.8.8 не прошёл. Пробуем следующую конфигурацию..." \
               "Ping to 8.8.8.8 failed. Trying next configuration..."
-      sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+      run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
       ((attempt++))
@@ -326,8 +342,8 @@ finish_session() {
   if (( TUNNEL_UP )); then
     log_info "Отключаем туннель (wg-quick down)..." \
              "Bringing tunnel down (wg-quick down)..."
-    sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    sudo ip link del client >/dev/null 2>&1 || true
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
     TUNNEL_UP=0
   fi
 
