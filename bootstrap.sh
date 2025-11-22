@@ -1,35 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_OWNER="Nospire"
-REPO_NAME="geekcom-deck-tools"
-RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main"
+GITHUB_USER="Nospire"
+GITHUB_REPO="geekcom-deck-tools"
 
-INSTALL_DIR="${HOME}/.scripts/geekcom-deck-tools"
+BIN_NAME="geekcom-deck-tools"
+BIN_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases/latest/download/${BIN_NAME}"
 
-mkdir -p "${INSTALL_DIR}"
-mkdir -p "${INSTALL_DIR}/actions"
+RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main"
 
-download() {
-  local url="$1"
-  local dst="$2"
-  echo "[BOOTSTRAP] Fetching ${url} -> ${dst}"
-  curl -fsSL "${url}" -o "${dst}"
-}
+BASE_DIR="${HOME}/.scripts"
+APP_DIR="${BASE_DIR}/geekcom-deck-tools"
+ACTIONS_DIR="${APP_DIR}/actions"
 
-# Бинарь GUI
-download "${RAW_BASE}/geekcom-deck-tools" "${INSTALL_DIR}/geekcom-deck-tools"
-chmod +x "${INSTALL_DIR}/geekcom-deck-tools"
+LOCAL_BIN="${APP_DIR}/${BIN_NAME}"
+LOCAL_ENGINE="${APP_DIR}/engine.sh"
 
-# Движок
-download "${RAW_BASE}/engine.sh" "${INSTALL_DIR}/engine.sh"
-chmod +x "${INSTALL_DIR}/engine.sh"
+echo "[INFO] Geekcom Deck Tools bootstrap"
+echo "[INFO] Target dir: ${APP_DIR}"
 
-# Actions-скрипты
+mkdir -p "${APP_DIR}"
+mkdir -p "${ACTIONS_DIR}"
+
+echo "[STEP] Downloading binary from: ${BIN_URL}"
+curl -fsSL -o "${LOCAL_BIN}.tmp" "${BIN_URL}"
+mv "${LOCAL_BIN}.tmp" "${LOCAL_BIN}"
+chmod +x "${LOCAL_BIN}"
+
+echo "[STEP] Downloading engine from: ${RAW_BASE}/engine.sh"
+curl -fsSL -o "${LOCAL_ENGINE}.tmp" "${RAW_BASE}/engine.sh"
+mv "${LOCAL_ENGINE}.tmp" "${LOCAL_ENGINE}"
+chmod +x "${LOCAL_ENGINE}"
+
 for f in openh264_fix.sh steamos_update.sh flatpak_update.sh antizapret.sh; do
-  download "${RAW_BASE}/actions/${f}" "${INSTALL_DIR}/actions/${f}"
-  chmod +x "${INSTALL_DIR}/actions/${f}"
+  echo "[STEP] Downloading action: ${f}"
+  curl -fsSL -o "${ACTIONS_DIR}/${f}.tmp" "${RAW_BASE}/actions/${f}"
+  mv "${ACTIONS_DIR}/${f}.tmp" "${ACTIONS_DIR}/${f}"
+  chmod +x "${ACTIONS_DIR}/${f}"
 done
 
-echo "[BOOTSTRAP] Done. Starting GUI..."
-exec "${INSTALL_DIR}/geekcom-deck-tools"
+echo "[OK] Geekcom Deck Tools updated."
+echo "[RUN] Starting GUI..."
+
+exec "${LOCAL_BIN}"
