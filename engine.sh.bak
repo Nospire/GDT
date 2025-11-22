@@ -57,13 +57,13 @@ need_cmd() {
 }
 
 # Унифицированный sudo: если есть пароль от GUI — используем его,
-# иначе пытаемся работать с уже активным sudo -n.
+# иначе падаем обратно на обычный sudo.
 run_sudo() {
   if [[ -n "$SUDO_PASS" ]]; then
-    # -p '' отключает текстовый промпт, чтобы не печатать [sudo] password ...
-    printf '%s\n' "$SUDO_PASS" | sudo -S -p '' -- "$@"
+    # не пишем пароль в логи, только в stdin sudo
+    printf '%s\n' "$SUDO_PASS" | sudo -S -- "$@"
   else
-    sudo -n -- "$@"
+    sudo -- "$@"
   fi
 }
 
