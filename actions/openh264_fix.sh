@@ -32,6 +32,26 @@ if flatpak mask --user --remove "${APP_ID}" >/dev/null 2>&1; then
 fi
 echo "[INFO] Flatpak masks (if any) for OpenH264 have been removed."
 
+# Чистим user-ветки OpenH264, если они остались от старого фикса
+echo "[INFO] Checking for user-level OpenH264 runtimes..."
+user_branches="$(
+  flatpak list --user --columns=application,branch 2>/dev/null \
+    | awk '$1 == "'"${APP_ID}"'" {print $2}' \
+    || true
+)"
+
+if [[ -n "$user_branches" ]]; then
+  echo "[INFO] Found user-level OpenH264 branches:"
+  printf '       %s\n' $user_branches
+  for b in $user_branches; do
+    echo "[INFO] Uninstalling user OpenH264 branch ${b}..."
+    flatpak uninstall -y --user "${APP_ID}//${b}" >/dev/null 2>&1 || true
+  done
+  echo "[INFO] User-level OpenH264 runtimes removed (if any)."
+else
+  echo "[INFO] No user-level OpenH264 runtimes found."
+fi
+
 tmp_err="$(mktemp /tmp/openh264-remote-info.XXXXXX)"
 cleanup_tmp() {
   rm -f "$tmp_err" || true
@@ -85,7 +105,7 @@ if [[ -z "$target_branches" ]]; then
   target_branches="$branches"
 fi
 
-echo "[INFO] Will install OpenH264 for branches:"
+echo "[INFO] Will install OpenH264 for branches (system only):"
 for b in $target_branches; do
   echo "       $b"
 done
@@ -94,30 +114,13 @@ overall_ok=0
 
 for b in $target_branches; do
   ref="${APP_ID}//${b}"
-  echo "[INFO] Installing ref: ${ref}"
+  echo "[INFO] Installing ref (system): ${ref}"
 
-  installed_ok=0
-
-  # System
   if run_sudo flatpak install -y --system "$ref"; then
-    installed_ok=1
+    overall_ok=1
     echo "[OK] Installed ${ref} to system flatpak (or it was already installed)."
   else
-    echo "[WARN] Failed to install ${ref} to system flatpak." >&2
-  fi
-
-  # User (всегда пробуем, даже если system уже есть)
-  if flatpak install -y --user "$ref"; then
-    installed_ok=1
-    echo "[OK] Installed ${ref} to user flatpak (or it was already installed)."
-  else
-    echo "[WARN] Failed to install ${ref} to user flatpak." >&2
-  fi
-
-  if (( installed_ok )); then
-    overall_ok=1
-  else
-    echo "[ERR] ${ref} failed both in system and user scopes." >&2
+    echo "[ERR] Failed to install ${ref} to system flatpak." >&2
   fi
 done
 
@@ -125,8 +128,39 @@ echo "[INFO] OpenH264 runtimes currently installed:"
 flatpak list | grep -i openh264 || echo "[INFO] No openh264 runtimes found in flatpak list."
 
 if (( overall_ok == 0 )); then
-  echo "[ERR] Failed to install any OpenH264 branch in any scope." >&2
+  echo "[ERR] Failed to install any OpenH264 branch in system scope." >&2
   exit 1
+fi
+
+# Обновляем все flatpak'и: system + user
+echo "[INFO] Running 'flatpak update -y --system'..."
+if run_sudo flatpak update -y --system; then
+  echo "[INFO] System flatpaks updated."
+else
+  echo "[WARN] Failed to update system flatpaks." >&2
+fi
+
+echo "[INFO] Running 'flatpak update -y --user'..."
+if flatpak update -y --user; then
+  echo "[INFO] User flatpaks updated."
+else
+  echo "[WARN] Failed to update user flatpaks." >&2
+fi
+
+# Мягкий рестарт Discover
+echo "[INFO] Restarting Discover (plasma-discover), if present..."
+if command -v plasma-discover >/dev/null 2>&1; then
+  if pgrep -x plasma-discover >/dev/null 2>&1; then
+    echo "[INFO] plasma-discover is running, restarting..."
+    pkill plasma-discover || true
+    # Попробуем заново запустить в фоне; если не взлетит — не критично
+    plasma-discover >/dev/null 2>&1 & disown || true
+    echo "[INFO] Discover restart requested."
+  else
+    echo "[INFO] plasma-discover is not running; nothing to restart."
+  fi
+else
+  echo "[INFO] plasma-discover binary not found; skipping Discover restart."
 fi
 
 echo "[INFO] OpenH264 installation/fix completed."
