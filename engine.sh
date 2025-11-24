@@ -17,7 +17,7 @@ HAVE_SESSION=0
 TUNNEL_UP=0
 FINISH_SENT=0
 
-# Пароль sudo, который передаёт GUI (если он вообще есть)
+# Пароль sudo, который передаёт GUI (если есть)
 SUDO_PASS="${GDT_SUDO_PASS:-}"
 
 mkdir -p "$CFG_DIR"
@@ -57,10 +57,9 @@ need_cmd() {
 }
 
 # Унифицированный sudo: если есть пароль от GUI — используем его,
-# иначе пытаемся работать с уже активным sudo -n.
+# иначе работаем с уже активным sudo -n.
 run_sudo() {
   if [[ -n "$SUDO_PASS" ]]; then
-    # -p '' отключает текстовый промпт, чтобы не печатать [sudo] password ...
     printf '%s\n' "$SUDO_PASS" | sudo -S -p '' -- "$@"
   else
     sudo -n -- "$@"
@@ -153,8 +152,8 @@ need_cmd wg-quick
 need_cmd ping
 
 # Проверка sudo:
-#  - если GUI передал пароль (SUDO_PASS не пустой) — считаем, что можем работать;
-#  - если нет пароля — ведём себя по-старому и требуем активный sudo -n.
+#  - если GUI передал пароль (SUDO_PASS не пустой) — работаем через него;
+#  - если пароля нет — требуем активный sudo -n.
 if [[ -z "$SUDO_PASS" ]] && ! sudo -n true 2>/dev/null; then
   log_err "sudo не активен. Сначала нажмите кнопку sudo внизу и введите пароль." \
           "sudo is not active. Press the sudo button below and enter your password first."
@@ -201,7 +200,7 @@ request_initial_config() {
     "Получен session_id=${SESSION_ID}" \
     "Got session_id=${SESSION_ID}"
 
-  # В stdout — ТОЛЬКО конфиг, без логов
+  # В stdout — только конфиг, без логов
   printf '%s\n' "$config_text"
   return 0
 }
@@ -237,7 +236,6 @@ request_next_config() {
     return 1
   fi
 
-  # В stdout — ТОЛЬКО конфиг
   printf '%s\n' "$config_text"
   return 0
 }
@@ -380,16 +378,20 @@ run_with_vpn() {
 
 case "$ACTION" in
   openh264_fix)
+    # Чистый фикс кодека, без обязательного обновления системы
     run_with_vpn "fix_openh264" "$CFG_DIR/actions/openh264_fix.sh"
     ;;
   steamos_update)
+    # Системное обновление: проходит как system_update для оркестратора
     run_with_vpn "system_update" "$CFG_DIR/actions/steamos_update.sh"
     ;;
   flatpak_update)
-    run_with_vpn "flatpak_update" "$CFG_DIR/actions/flatpak_update.sh"
+    # Обновление flatpak’ов тоже идёт как system_update
+    run_with_vpn "system_update" "$CFG_DIR/actions/flatpak_update.sh"
     ;;
   antizapret)
-    run_with_vpn "antizapret" "$CFG_DIR/actions/antizapret.sh"
+    # Антизапрет-туннель: с точки зрения сервиса тоже system_update
+    run_with_vpn "system_update" "$CFG_DIR/actions/antizapret.sh"
     ;;
   *)
     log_err "Неизвестное действие: ${ACTION}" \
