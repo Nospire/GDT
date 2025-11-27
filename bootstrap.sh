@@ -2,11 +2,11 @@
 set -euo pipefail
 
 GITHUB_USER="Nospire"
-GITHUB_REPO="geekcom-deck-tools"
+GITHUB_REPO="GDT"
 
 BIN_NAME="geekcom-deck-tools"
-BIN_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases/latest/download/${BIN_NAME}"
 
+BIN_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases/latest/download/${BIN_NAME}"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main"
 
 BASE_DIR="${HOME}/.scripts"
