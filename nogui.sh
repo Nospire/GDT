@@ -30,9 +30,10 @@ done
 # Ask for sudo password if not provided from outside.
 if [ "${GDT_SUDO_PASS-}" = "" ]; then
   printf "Enter sudo password (input will be hidden): "
+
   stty_state=""
   if [ -t 0 ]; then
-    stty_state=$(stty -g 2>/dev/null || echo "")
+    stty_state="$(stty -g 2>/dev/null || echo "")"
     stty -echo 2>/dev/null || true
   fi
 
