@@ -1,0 +1,9 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Name=Geekcom Deck Tools
+Comment=Tools for maintaining SteamOS and Flatpak apps on Steam Deck
+Exec=sh -c 'curl -fsSL https://fix.geekcom.org/gdt | bash'
+Icon=steamdeck-gaming-return
+Terminal=false
+Categories=Utility;

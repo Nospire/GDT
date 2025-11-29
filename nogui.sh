@@ -29,6 +29,7 @@ for f in openh264_fix.sh steamos_update.sh flatpak_update.sh antizapret.sh; do
   chmod +x "${ACTIONS_DIR}/${f}"
 done
 
+<<<<<<< HEAD
 # Если пароль не передан извне, спрашиваем в TTY.
 if [[ -z "${GDT_SUDO_PASS:-}" ]]; then
   printf "Enter sudo password (input will be hidden): "
@@ -39,3 +40,16 @@ export GDT_SUDO_PASS
 
 echo "[RUN] Starting SteamOS update (no GUI)..."
 exec "${LOCAL_ENGINE}" steamos_update ru
+=======
+# In no-GUI mode we do not pass the sudo password via env
+unset GDT_SUDO_PASS || true
+
+echo "[STEP] sudo authentication (TTY or terminal will prompt)..."
+if ! sudo -v; then
+  echo "[ERR] sudo authentication failed." >&2
+  exit 1
+fi
+
+echo "[RUN] Starting SteamOS update (no GUI)..."
+exec "${LOCAL_ENGINE}" steamos_update en
+>>>>>>> b50e2ac (Add no-GUI updater)
