@@ -29,20 +29,25 @@ done
 
 # Ask for sudo password if not provided from outside.
 if [ "${GDT_SUDO_PASS-}" = "" ]; then
-  printf "Enter sudo password (input will be hidden): "
+  TTY_DEV="/dev/tty"
+
+  if [ ! -r "$TTY_DEV" ] || [ ! -w "$TTY_DEV" ]; then
+    echo "[ERR] No TTY available. Set GDT_SUDO_PASS in environment." >&2
+    exit 1
+  fi
+
+  printf "Enter sudo password (input will be hidden): " >"$TTY_DEV"
 
   stty_state=""
-  if [ -t 0 ]; then
-    stty_state="$(stty -g 2>/dev/null || echo "")"
-    stty -echo 2>/dev/null || true
-  fi
+  stty_state="$(stty -g <"$TTY_DEV" 2>/dev/null || echo "")"
+  stty -echo <"$TTY_DEV" 2>/dev/null || true
 
-  read -r GDT_SUDO_PASS || GDT_SUDO_PASS=""
+  IFS= read -r GDT_SUDO_PASS <"$TTY_DEV" || GDT_SUDO_PASS=""
 
   if [ -n "$stty_state" ]; then
-    stty "$stty_state" 2>/dev/null || true
+    stty "$stty_state" <"$TTY_DEV" 2>/dev/null || true
   fi
-  printf "\n"
+  printf "\n" >"$TTY_DEV"
 fi
 
 export GDT_SUDO_PASS
