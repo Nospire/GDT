@@ -7,7 +7,6 @@ BASE_URL="${GDT_BASE_URL:-https://fix.geekcom.org}"
 
 CFG_DIR="${HOME}/.scripts/geekcom-deck-tools"
 WG_CONF="${CFG_DIR}/client.conf"
-MAX_CONFIGS=4
 
 SESSION_ID=""
 HAVE_SESSION=0
@@ -133,7 +132,6 @@ request_initial_config() {
   HAVE_SESSION=1
   log "Got session_id from orchestrator."
 
-  # В stdout отдаём чистый config_text
   printf '%s\n' "$config_text"
 }
 
@@ -191,7 +189,6 @@ finish_session() {
     return 0
   fi
 
-  # Сначала гасим туннель и чистим конфиг, чтобы /finish шёл не через VPN
   if (( TUNNEL_UP )); then
     log "Bringing tunnel down (wg-quick down) before sending finish..."
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
@@ -214,7 +211,6 @@ finish_session() {
 }
 
 cleanup() {
-  # Если ещё есть поднятый туннель — гасим.
   if (( TUNNEL_UP )); then
     log "Bringing tunnel down (wg-quick down)..."
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
@@ -227,7 +223,6 @@ cleanup() {
     rm -f "$WG_CONF" || true
   fi
 
-  # Если сессия была, но /finish не отправляли — шлём cancelled.
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
     log "Session not finalized, sending finish(result=cancelled)..."
     curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
@@ -240,78 +235,94 @@ cleanup() {
 
 trap 'cleanup' EXIT INT TERM
 
-# ========= VPN BRING-UP =========
+# ========= HELPER: APPLY CONFIG AND CHECK PING =========
+
+bring_up_from_config() {
+  local config_text="$1"
+
+  log "Saving VPN config from orchestrator..."
+  printf '%s\n' "$config_text" > "$WG_CONF"
+
+  log "Stripping DNS= lines from config (SteamOS without resolvconf)..."
+  sed -i '/^[[:space:]]*DNS[[:space:]]*=/d' "$WG_CONF" || true
+
+  chmod 600 "$WG_CONF" || true
+
+  run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+  run_sudo ip link del client >/dev/null 2>&1 || true
+
+  log "Bringing tunnel up via wg-quick..."
+  if ! run_sudo wg-quick up "$WG_CONF"; then
+    warn "Failed to bring tunnel up with this config."
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
+    rm -f "$WG_CONF" || true
+    TUNNEL_UP=0
+    return 1
+  fi
+
+  TUNNEL_UP=1
+
+  log "Small pause after tunnel up..."
+  sleep 2
+
+  log "Flushing DNS cache..."
+  flush_dns
+
+  log "Checking reachability of 8.8.8.8 via ping..."
+  if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+    log "Ping to 8.8.8.8 OK. VPN looks fine."
+    return 0
+  else
+    warn "Ping to 8.8.8.8 failed on this config."
+    return 2
+  fi
+}
+
+# ========= VPN BRING-UP WITH ORCHESTRATOR-DRIVEN CHAIN =========
 
 ensure_vpn_up() {
   local reason="$1"
-  local attempt=1
-  local mode="initial"
   local config_text=""
+  local rc=0
+  local attempt=1
 
   log "=== Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
 
-  while (( attempt <= MAX_CONFIGS )); do
-    if [[ "$mode" == "initial" ]]; then
-      if ! config_text="$(request_initial_config "$reason")"; then
-        return 1
-      fi
-      mode="next"
-    else
-      if ! config_text="$(request_next_config)"; then
-        return 1
-      fi
-    fi
+  if ! config_text="$(request_initial_config "$reason")"; then
+    err "Failed to obtain first VPN config from orchestrator."
+    return 1
+  fi
 
-    log "Saving VPN config from orchestrator..."
-    printf '%s\n' "$config_text" > "$WG_CONF"
+  while :; do
+    rc=0
+    bring_up_from_config "$config_text"
+    rc=$?
 
-    log "Stripping DNS= lines from config (SteamOS without resolvconf)..."
-    sed -i '/^[[:space:]]*DNS[[:space:]]*=/d' "$WG_CONF" || true
-
-    chmod 600 "$WG_CONF" || true
-    log "VPN config prepared."
-
-    # Чистим хвосты от прошлых запусков
-    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    run_sudo ip link del client >/dev/null 2>&1 || true
-
-    log "Bringing tunnel up via wg-quick..."
-    if ! run_sudo wg-quick up "$WG_CONF"; then
-      warn "Failed to bring tunnel up with this config."
-      run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-      rm -f "$WG_CONF" || true
-      TUNNEL_UP=0
-      ((attempt++))
-      log "=== Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
-      continue
-    fi
-
-    TUNNEL_UP=1
-
-    log "Small pause after tunnel up..."
-    sleep 2
-
-    log "Flushing DNS cache..."
-    flush_dns
-
-    log "Checking reachability of 8.8.8.8 via ping..."
-    if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-      log "Ping to 8.8.8.8 OK. VPN looks fine."
+    if (( rc == 0 )); then
       return 0
-    else
-      warn "Ping to 8.8.8.8 failed. Asking orchestrator for another config..."
-      run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-      run_sudo ip link del client >/dev/null 2>&1 || true
-      rm -f "$WG_CONF" || true
-      TUNNEL_UP=0
-      ((attempt++))
-      log "=== Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
-      # следующая итерация возьмёт конфиг через report-broken
     fi
-  done
 
-  err "Failed to obtain working VPN connection."
-  return 1
+    # rc == 1 -> туннель не поднялся вообще
+    # rc == 2 -> туннель поднят, но пинг не прошёл
+
+    attempt=$((attempt + 1))
+    log "=== Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
+
+    local next_text=""
+    if ! next_text="$(request_next_config)"; then
+      warn "Cannot get alternative VPN config from orchestrator."
+      if (( TUNNEL_UP )); then
+        warn "Falling back to last VPN config despite ping failure."
+        return 0
+      else
+        err "No VPN is up and orchestrator can't provide more configs."
+        return 1
+      fi
+    fi
+
+    config_text="$next_text"
+  done
 }
 
 # ========= BUSINESS LOGIC: STEAMOS UPDATE =========
