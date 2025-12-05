@@ -17,23 +17,25 @@ GDT_SUDO_PASS="${GDT_SUDO_PASS:-}"
 
 mkdir -p "$CFG_DIR"
 
-# ========= LOG / UTILS =========
+# ========= LOGGING =========
 
-log() {
+log_info() {
   printf '[INFO] %s\n' "$*" >&2
 }
 
-warn() {
+log_warn() {
   printf '[WARN] %s\n' "$*" >&2
 }
 
-err() {
+log_err() {
   printf '[ERR] %s\n' "$*" >&2
 }
 
+# ========= UTILS =========
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    err "Command '$1' not found. Install it and retry."
+    log_err "Command '$1' not found. Install it and retry."
     exit 1
   fi
 }
@@ -59,7 +61,7 @@ except Exception:
     pass
 PY
   else
-    err "Need jq or python3 to parse JSON."
+    log_err "Need jq or python3 to parse JSON."
     exit 1
   fi
 }
@@ -76,108 +78,38 @@ flush_dns() {
   fi
 }
 
-# ========= SUDO PASSWORD =========
+# ========= SUDO HANDLING =========
 
 read_sudo_password() {
   if [[ -n "$GDT_SUDO_PASS" ]]; then
     return 0
   fi
 
-  printf "Enter sudo password (input will be hidden): " > /dev/tty
-  stty -echo </dev/tty
-  IFS= read -r GDT_SUDO_PASS </dev/tty || true
-  stty echo </dev/tty
-  printf "\n" > /dev/tty
+  if [[ -t 0 ]]; then
+    printf "Enter sudo password (input will be hidden): " > /dev/tty
+    stty -echo </dev/tty
+    IFS= read -r GDT_SUDO_PASS </dev/tty || true
+    stty echo </dev/tty
+    printf "\n" > /dev/tty
+  else
+    printf "Enter sudo password (input will be hidden): " > /dev/tty
+    stty -echo </dev/tty
+    IFS= read -r GDT_SUDO_PASS </dev/tty || true
+    stty echo </dev/tty
+    printf "\n" > /dev/tty
+  fi
 
   if [[ -z "$GDT_SUDO_PASS" ]]; then
-    err "Empty sudo password."
+    log_err "Empty sudo password."
     exit 1
   fi
 
   if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
-    err "Wrong sudo password."
+    log_err "Wrong sudo password."
     exit 1
   fi
 
   export GDT_SUDO_PASS
-}
-
-# ========= ORCHESTRATOR CALLS =========
-
-request_initial_config() {
-  local reason="$1"
-
-  log "Requesting initial VPN config (reason=${reason})..."
-
-  local res
-  if ! res=$(
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/request" \
-      -H 'content-type: application/json' \
-      -d "{\"reason\":\"${reason}\"}"
-  ); then
-    err "Failed to call /api/v1/vpn/request on orchestrator."
-    return 1
-  fi
-
-  SESSION_ID="$(printf '%s' "$res" | json_get session_id || true)"
-  local config_text
-  config_text="$(printf '%s' "$res" | json_get config_text || true)"
-
-  if [[ -z "$SESSION_ID" || -z "$config_text" ]]; then
-    err "Failed to get session_id or config_text from orchestrator."
-    printf '%s\n' "$res" >&2
-    return 1
-  fi
-
-  HAVE_SESSION=1
-  log "Got session_id from orchestrator."
-
-  printf '%s\n' "$config_text"
-}
-
-request_next_config() {
-  log "Requesting next VPN config (report-broken)..."
-
-  local res http_code body
-
-  if ! res=$(
-    curl -sS -w '\n%{http_code}' \
-      -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
-      -H 'content-type: application/json' \
-      -d "{\"session_id\":\"${SESSION_ID}\"}"
-  ); then
-    err "Failed to call /api/v1/vpn/report-broken on orchestrator."
-    return 1
-  fi
-
-  http_code="$(printf '%s\n' "$res" | tail -n1)"
-  body="$(printf '%s\n' "$res" | sed '$d')"
-
-  if [[ "$http_code" != "200" ]]; then
-    if [[ "$http_code" == "404" ]]; then
-      err "Orchestrator reported: session_not_found. No more configs available."
-    else
-      err "Orchestrator returned HTTP ${http_code} for /vpn/report-broken."
-    fi
-    printf '%s\n' "$body" >&2
-    return 1
-  fi
-
-  local new_sid
-  new_sid="$(printf '%s' "$body" | json_get new_session_id || true)"
-  if [[ -n "$new_sid" ]]; then
-    SESSION_ID="$new_sid"
-  fi
-
-  local config_text
-  config_text="$(printf '%s' "$body" | json_get config_text || true)"
-  if [[ -z "$config_text" ]]; then
-    err "Service did not return config_text in /vpn/report-broken response."
-    printf '%s\n' "$body" >&2
-    return 1
-  fi
-
-  printf '%s\n' "$config_text"
 }
 
 # ========= FINISH / CLEANUP =========
@@ -185,216 +117,262 @@ request_next_config() {
 finish_session() {
   local result="$1"  # success | cancelled
 
-  if (( ! HAVE_SESSION || FINISH_SENT )); then
-    return 0
-  fi
-
+  # 1) Всегда сначала гасим туннель и чистим config,
+  #    чтобы /finish ушёл по обычному интернету.
   if (( TUNNEL_UP )); then
-    log "Bringing tunnel down (wg-quick down) before sending finish..."
+    log_info "Bringing tunnel down (wg-quick down) before sending status..."
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
     run_sudo ip link del client >/dev/null 2>&1 || true
     TUNNEL_UP=0
   fi
 
   if [[ -f "$WG_CONF" ]]; then
-    log "Removing temporary VPN config."
-    rm -f "$WG_CONF" || true
-  fi
-
-  log "Sending /vpn/finish (result=${result}) to orchestrator..."
-  curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
-    -H 'content-type: application/json' \
-    -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
-    >/dev/null 2>&1 || warn "Failed to send /vpn/finish to orchestrator."
-
-  FINISH_SENT=1
-}
-
-cleanup() {
-  if (( TUNNEL_UP )); then
-    log "Bringing tunnel down (wg-quick down)..."
-    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    run_sudo ip link del client >/dev/null 2>&1 || true
-    TUNNEL_UP=0
-  fi
-
-  if [[ -f "$WG_CONF" ]]; then
-    log "Removing temporary VPN config."
+    log_info "Removing temporary VPN config."
     rm -f "$WG_CONF" || true
   fi
 
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
-    log "Session not finalized, sending finish(result=cancelled)..."
+    log_info "Sending /vpn/finish (result=${result}) for session_id=${SESSION_ID}..."
     curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
       -H 'content-type: application/json' \
-      -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"cancelled\"}" \
-      >/dev/null 2>&1 || true
+      -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
+      >/dev/null 2>&1 || log_warn "finish: network error while sending result."
     FINISH_SENT=1
+  fi
+}
+
+cleanup() {
+  # Если есть сессия и мы ещё не звали /finish — делаем это,
+  # там уже всё погасится и почистится.
+  if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
+    finish_session "cancelled"
+    return
+  fi
+
+  # Иначе просто гасим VPN и удаляем конфиг.
+  if (( TUNNEL_UP )); then
+    log_info "Bringing tunnel down (wg-quick down)..."
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
+    TUNNEL_UP=0
+  fi
+
+  if [[ -f "$WG_CONF" ]]; then
+    log_info "Removing temporary VPN config."
+    rm -f "$WG_CONF" || true
   fi
 }
 
 trap 'cleanup' EXIT INT TERM
 
-# ========= HELPER: APPLY CONFIG AND CHECK PING =========
+# ========= ORCHESTRATOR =========
 
-bring_up_from_config() {
-  local config_text="$1"
+request_initial_config() {
+  local reason="$1"
 
-  log "Saving VPN config from orchestrator..."
-  printf '%s\n' "$config_text" > "$WG_CONF"
+  log_info "Requesting initial VPN config (reason=${reason})..."
 
-  log "Stripping DNS= lines from config (SteamOS without resolvconf)..."
-  sed -i '/^[[:space:]]*DNS[[:space:]]*=/d' "$WG_CONF" || true
+  local res
+  res=$(
+    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/request" \
+      -H 'content-type: application/json' \
+      -d "{\"reason\":\"${reason}\"}"
+  )
 
-  chmod 600 "$WG_CONF" || true
+  SESSION_ID="$(printf '%s' "$res" | json_get session_id || true)"
+  local config_text
+  config_text="$(printf '%s' "$res" | json_get config_text || true)"
 
-  run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-  run_sudo ip link del client >/dev/null 2>&1 || true
-
-  log "Bringing tunnel up via wg-quick..."
-  if ! run_sudo wg-quick up "$WG_CONF"; then
-    warn "Failed to bring tunnel up with this config."
-    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
-    run_sudo ip link del client >/dev/null 2>&1 || true
-    rm -f "$WG_CONF" || true
-    TUNNEL_UP=0
+  if [[ -z "$SESSION_ID" || -z "$config_text" ]]; then
+    log_err "Failed to get session_id or config_text from orchestrator."
+    echo "$res" >&2
     return 1
   fi
 
-  TUNNEL_UP=1
+  HAVE_SESSION=1
+  log_info "Got session_id from orchestrator."
 
-  log "Small pause after tunnel up..."
-  sleep 2
-
-  log "Flushing DNS cache..."
-  flush_dns
-
-  log "Checking reachability of 8.8.8.8 via ping..."
-  if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-    log "Ping to 8.8.8.8 OK. VPN looks fine."
-    return 0
-  else
-    warn "Ping to 8.8.8.8 failed on this config."
-    return 2
-  fi
+  printf '%s\n' "$config_text"
+  return 0
 }
 
-# ========= VPN BRING-UP WITH ORCHESTRATOR-DRIVEN CHAIN =========
+request_next_config() {
+  log_info "Requesting next VPN config (report-broken)..."
+
+  local res
+  res=$(
+    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
+      -H 'content-type: application/json' \
+      -d "{\"session_id\":\"${SESSION_ID}\"}"
+  )
+
+  local new_sid
+  new_sid="$(printf '%s' "$res" | json_get new_session_id || true)"
+  if [[ -n "$new_sid" ]]; then
+    SESSION_ID="$new_sid"
+    log_info "Updated session_id from orchestrator."
+  fi
+
+  local config_text
+  config_text="$(printf '%s' "$res" | json_get config_text || true)"
+  if [[ -z "$config_text" ]]; then
+    log_err "Orchestrator did not return config_text. Maybe attempts limit reached."
+    echo "$res" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$config_text"
+  return 0
+}
+
+# ========= VPN BRING-UP =========
 
 ensure_vpn_up() {
   local reason="$1"
-  local config_text=""
-  local rc=0
   local attempt=1
+  local have_initial=0
+  local config_text=""
 
-  log "=== Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
-
-  if ! config_text="$(request_initial_config "$reason")"; then
-    err "Failed to obtain first VPN config from orchestrator."
-    return 1
-  fi
+  log_info "Starting VPN operation (reason=${reason})..."
 
   while :; do
-    rc=0
-    bring_up_from_config "$config_text"
-    rc=$?
+    log_info "=== Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
 
-    if (( rc == 0 )); then
-      return 0
-    fi
-
-    # rc == 1 -> туннель не поднялся вообще
-    # rc == 2 -> туннель поднят, но пинг не прошёл
-
-    attempt=$((attempt + 1))
-    log "=== Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
-
-    local next_text=""
-    if ! next_text="$(request_next_config)"; then
-      warn "Cannot get alternative VPN config from orchestrator."
-      if (( TUNNEL_UP )); then
-        warn "Falling back to last VPN config despite ping failure."
-        return 0
-      else
-        err "No VPN is up and orchestrator can't provide more configs."
+    if (( have_initial == 0 )); then
+      if ! config_text="$(request_initial_config "$reason")"; then
+        return 1
+      fi
+      have_initial=1
+    else
+      if ! config_text="$(request_next_config)"; then
         return 1
       fi
     fi
 
-    config_text="$next_text"
+    log_info "Saving VPN config from orchestrator..."
+    printf '%s\n' "$config_text" > "$WG_CONF"
+
+    log_info "Stripping DNS= lines from config (SteamOS without resolvconf)..."
+    sed -i '/^[[:space:]]*DNS[[:space:]]*=/d' "$WG_CONF" || true
+
+    chmod 600 "$WG_CONF" || true
+
+    # Чистим хвосты от прошлых попыток
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
+
+    log_info "Bringing tunnel up via wg-quick..."
+    if ! run_sudo wg-quick up "$WG_CONF"; then
+      log_warn "Failed to bring tunnel up with this config."
+      run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+      run_sudo ip link del client >/dev/null 2>&1 || true
+      rm -f "$WG_CONF" || true
+      ((attempt++))
+      continue
+    fi
+
+    TUNNEL_UP=1
+
+    log_info "Small pause after tunnel up..."
+    sleep 5
+
+    log_info "Flushing DNS cache..."
+    flush_dns
+
+    log_info "Checking reachability of 8.8.8.8 via ping..."
+    if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+      log_info "Ping to 8.8.8.8 OK. VPN looks fine."
+      return 0
+    fi
+
+    log_warn "Ping to 8.8.8.8 failed on this config."
+
+    # Гасим туннель и чистим конфиг ПЕРЕД запросом нового конфига
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
+    TUNNEL_UP=0
+    rm -f "$WG_CONF" || true
+
+    ((attempt++))
+    # Следующая итерация возьмёт новый конфиг через report-broken по обычному интернету
   done
 }
 
-# ========= BUSINESS LOGIC: STEAMOS UPDATE =========
+# ========= BUSINESS LOGIC =========
 
 run_steamos_update() {
-  log "Checking for steamos-update..."
+  local code
+
+  log_info "Checking for steamos-update..."
   if ! command -v steamos-update >/dev/null 2>&1; then
-    err "steamos-update command not found. This script is for SteamOS only."
+    log_err "steamos-update command not found. This action is only for SteamOS."
     return 1
   fi
 
-  log "Running 'steamos-update check' (may exit with 0 or 7)..."
-  run_sudo steamos-update check
-  local check_code=$?
-  if (( check_code != 0 && check_code != 7 )); then
-    warn "'steamos-update check' exited with code ${check_code} (unexpected error)."
+  log_info "Running 'steamos-update check' (may exit non-zero)..."
+  if ! run_sudo steamos-update check; then
+    code=$?
+    if [[ "$code" -eq 0 || "$code" -eq 7 ]]; then
+      log_warn "'steamos-update check' exited with code ${code} (no updates or non-critical condition)."
+    else
+      log_err "'steamos-update check' failed with code ${code}."
+      return 1
+    fi
   fi
 
-  log "Running full 'steamos-update' (0 or 7 are treated as success)..."
-  run_sudo steamos-update
-  local upd_code=$?
-  if (( upd_code != 0 && upd_code != 7 )); then
-    err "'steamos-update' failed with code ${upd_code}."
-    return "$upd_code"
+  log_info "Running full 'steamos-update'..."
+  if ! run_sudo steamos-update; then
+    code=$?
+    if [[ "$code" -eq 0 || "$code" -eq 7 ]]; then
+      log_info "'steamos-update' reports no updates (code ${code})."
+      return 0
+    else
+      log_err "'steamos-update' failed with code ${code}."
+      return 1
+    fi
   fi
 
-  if (( upd_code == 7 )); then
-    log "'steamos-update' returned 7 (no updates available); treating as success."
-  fi
-
-  log "SteamOS update command finished."
+  log_info "SteamOS update finished successfully."
   return 0
 }
 
 run_with_vpn() {
   local reason="$1"
-  shift
 
   if ! ensure_vpn_up "$reason"; then
-    err "Cannot get working VPN connection."
+    log_err "Cannot get working VPN connection."
+    finish_session "cancelled"
     return 1
   fi
 
   local status=0
-  "$@" || status=$?
+  run_steamos_update || status=$?
 
   if (( status == 0 )); then
     finish_session "success"
+    return 0
   else
     finish_session "cancelled"
+    return "$status"
   fi
-
-  return "$status"
 }
 
 # ========= MAIN =========
 
-log "Geekcom Deck Tools no-GUI updater"
-log "This will update SteamOS via VPN orchestrator."
+log_info "Geekcom Deck Tools no-GUI updater"
+log_info "This will update SteamOS via VPN orchestrator."
 
 need_cmd curl
 need_cmd wg-quick
 need_cmd ping
 need_cmd sudo
-need_cmd steamos-update
 
 read_sudo_password
 
-if run_with_vpn "system_update" run_steamos_update; then
-  log "SteamOS update finished successfully."
+if run_with_vpn "system_update"; then
+  log_info "SteamOS update finished successfully."
   exit 0
 else
-  err "SteamOS update failed."
+  log_err "SteamOS update failed."
   exit 1
 fi
