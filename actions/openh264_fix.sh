@@ -2,6 +2,11 @@
 set -euo pipefail
 
 APP_ID="org.freedesktop.Platform.openh264"
+REMOTE="flathub"
+
+# Ветка по умолчанию. При необходимости можно переопределить:
+#   OPENH264_BRANCH=2.4.1
+TARGET_BRANCH="${OPENH264_BRANCH:-2.5.1}"
 
 # Пароль sudo от GUI (через engine.sh)
 SUDO_PASS="${GDT_SUDO_PASS:-}"
@@ -49,11 +54,14 @@ else
 fi
 
 echo "[INFO] Installing system-level OpenH264 runtime from flathub..."
+echo "[INFO] Target branch: ${TARGET_BRANCH}"
+
+ref="${APP_ID}//${TARGET_BRANCH}"
 
 INSTALL_OUTPUT=""
 INSTALL_RC=0
 
-if INSTALL_OUTPUT="$(run_sudo flatpak install -y --system flathub ${APP_ID} 2>&1)"; then
+if INSTALL_OUTPUT="$(run_sudo flatpak install -y --system "${REMOTE}" "${ref}" 2>&1)"; then
   INSTALL_RC=0
 else
   INSTALL_RC=$?
@@ -65,12 +73,12 @@ fi
 
 if [[ $INSTALL_RC -ne 0 ]]; then
   if printf '%s\n' "$INSTALL_OUTPUT" | grep -qi "already installed"; then
-    echo "[INFO] OpenH264 is already installed system-wide."
+    echo "[INFO] OpenH264 ${TARGET_BRANCH} is already installed system-wide."
     INSTALL_RC=0
   else
-    echo "[ERR] Failed to install OpenH264 (exit code ${INSTALL_RC})." >&2
+    echo "[ERR] Failed to install OpenH264 ref ${ref} (exit code ${INSTALL_RC})." >&2
     echo "[ERR] If this persists, try manual command:" >&2
-    echo "[ERR]   flatpak install --system flathub org.freedesktop.Platform.openh264" >&2
+    echo "[ERR]   flatpak install --system ${REMOTE} ${ref}" >&2
   fi
 fi
 
