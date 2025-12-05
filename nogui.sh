@@ -324,19 +324,22 @@ run_steamos_update() {
   fi
 
   log "Running 'steamos-update check' (may exit non-zero)..."
-  if ! run_sudo steamos-update check; then
-    local code=$?
-    warn "'steamos-update check' exited with code ${code} (no updates or non-critical error)."
+  run_sudo steamos-update check
+  local check_code=$?
+  if (( check_code != 0 )); then
+    warn "'steamos-update check' exited with code ${check_code} (no updates or non-critical error)."
   fi
 
   log "Running full 'steamos-update'..."
-  if ! run_sudo steamos-update; then
-    local code=$?
-    err "'steamos-update' failed with code ${code}."
-    return "$code"
+  run_sudo steamos-update
+  local upd_code=$?
+  if (( upd_code != 0 )); then
+    err "'steamos-update' failed with code ${upd_code}."
+    return "$upd_code"
   fi
 
   log "SteamOS update command finished."
+  return 0
 }
 
 run_with_vpn() {
