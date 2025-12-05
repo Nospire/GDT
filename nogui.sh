@@ -64,10 +64,6 @@ flush_dns() {
   fi
 }
 
-print_endpoint_from_config() {
-  grep -E '^[[:space:]]*Endpoint[[:space:]]*=' || true
-}
-
 # ========= SUDO HANDLING =========
 
 read_sudo_password() {
@@ -135,7 +131,7 @@ cleanup() {
 
 trap 'cleanup' EXIT INT TERM
 
-# ========= ORCHESTRATOR: CONFIG =========
+# ========= ORCHEСТРАТОР: CONFIG =========
 
 request_initial_config() {
   local reason="$1"
@@ -184,7 +180,6 @@ request_next_config() {
   local detail
   detail="$(printf '%s' "$res" | json_get detail || true)"
 
-  # Если сервер говорит, что сессия не найдена или бэкенды кончились — выходим.
   case "$detail" in
     all_backends_exhausted_for_client_and_reason|no_backend_available_on_unused_servers|session_not_found)
       echo "[ERR] Orchestrator reported: ${detail}. No more configs available." >&2
@@ -234,21 +229,21 @@ ensure_vpn_up() {
       fi
     fi
 
-    echo "[INFO] Saving config to ${WG_CONF}..."
+    echo "[INFO] Saving VPN config from orchestrator..."
     printf '%s\n' "$config_text" > "$WG_CONF"
 
-    echo "[INFO] Removing DNS= lines from config (SteamOS without resolvconf)..."
+    echo "[INFO] Stripping DNS= lines from config (SteamOS without resolvconf)..."
     sed -i '/^[[:space:]]*DNS[[:space:]]*=/d' "$WG_CONF" || true
 
     chmod 600 "$WG_CONF" || true
 
-    echo "[INFO] Config endpoint:"
-    print_endpoint_from_config < "$WG_CONF" || true
+    # Без деталей Endpoint, только факт
+    echo "[INFO] VPN config prepared."
 
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
     run_sudo ip link del client >/dev/null 2>&1 || true
 
-    echo "[INFO] Bringing tunnel up: wg-quick up ${WG_CONF}"
+    echo "[INFO] Bringing tunnel up via wg-quick..."
     if ! run_sudo wg-quick up "$WG_CONF"; then
       echo "[WARN] Failed to bring tunnel up with this config." >&2
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
@@ -290,11 +285,41 @@ run_steamos_update() {
     return 1
   fi
 
-  echo "[INFO] Running 'steamos-update check' (may exit non-zero)..."
-  run_sudo steamos-update check || true
+  echo "[INFO] Running 'steamos-update check'..."
+  local check_output=""
+  local check_rc=0
+
+  check_output="$(run_sudo steamos-update check 2>&1)" || check_rc=$?
+  echo "${check_output}"
+
+  if (( check_rc != 0 )); then
+    if echo "$check_output" | grep -qi "No update available"; then
+      echo "[INFO] No SteamOS updates available. Nothing to do."
+      return 0
+    else
+      echo "[ERR] 'steamos-update check' failed with code ${check_rc}." >&2
+      return 1
+    fi
+  fi
 
   echo "[INFO] Running full 'steamos-update'..."
-  run_sudo steamos-update
+  local update_output=""
+  local update_rc=0
+
+  update_output="$(run_sudo steamos-update 2>&1)" || update_rc=$?
+  echo "${update_output}"
+
+  if (( update_rc != 0 )); then
+    if echo "$update_output" | grep -qi "No update available"; then
+      echo "[INFO] No SteamOS updates available during full update. Nothing to do."
+      return 0
+    fi
+    echo "[ERR] 'steamos-update' failed with code ${update_rc}." >&2
+    return 1
+  fi
+
+  echo "[INFO] SteamOS update command finished."
+  return 0
 }
 
 run_with_vpn() {
