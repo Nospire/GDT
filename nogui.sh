@@ -72,7 +72,6 @@ print_endpoint_from_config() {
 
 read_sudo_password() {
   if [[ -n "$GDT_SUDO_PASS" ]]; then
-    # уже есть в окружении — просто валидируем
     if printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
       echo "[INFO] Using sudo password from GDT_SUDO_PASS."
       return 0
@@ -136,7 +135,7 @@ cleanup() {
 
 trap 'cleanup' EXIT INT TERM
 
-# ========= ORCHESTRATOR: REQUEST CONFIG =========
+# ========= ORCHEСТРАТОР: CONFIG =========
 
 request_initial_config() {
   local reason="$1"
@@ -148,7 +147,7 @@ request_initial_config() {
       -H 'content-type: application/json' \
       -d "{\"reason\":\"${reason}\"}"
   ); then
-    echo "[ERR] Failed to call /api/v1/vpn/request on ${BASE_URL}." >&2
+    echo "[ERR] Network error while calling orchestrator (request)." >&2
     return 1
   fi
 
@@ -157,7 +156,7 @@ request_initial_config() {
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
 
   if [[ -z "$SESSION_ID" || -z "$config_text" ]]; then
-    echo "[ERR] Failed to get session_id or config_text from service." >&2
+    echo "[ERR] Failed to get session_id or config_text from orchestrator." >&2
     echo "$res" >&2
     return 1
   fi
@@ -165,7 +164,6 @@ request_initial_config() {
   HAVE_SESSION=1
   echo "[INFO] Got session_id=${SESSION_ID}" >&2
 
-  # В stdout — только чистый WG-конфиг
   printf '%s\n' "$config_text"
   return 0
 }
@@ -179,7 +177,7 @@ request_next_config() {
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\"}"
   ); then
-    echo "[ERR] Failed to call /api/v1/vpn/report-broken on ${BASE_URL}." >&2
+    echo "[ERR] Network error while calling orchestrator (report-broken)." >&2
     return 1
   fi
 
@@ -193,7 +191,7 @@ request_next_config() {
   local config_text
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
   if [[ -z "$config_text" ]]; then
-    echo "[ERR] Service did not return config_text. Maybe all backends exhausted." >&2
+    echo "[ERR] Orchestrator did not return config_text. Maybe all backends exhausted." >&2
     echo "$res" >&2
     return 1
   fi
@@ -235,7 +233,6 @@ ensure_vpn_up() {
     echo "[INFO] Config endpoint:"
     print_endpoint_from_config < "$WG_CONF" || true
 
-    # Clean up leftovers from previous runs
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
     run_sudo ip link del client >/dev/null 2>&1 || true
 
