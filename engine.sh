@@ -10,14 +10,25 @@ BASE_URL="${GDT_BASE_URL:-https://fix.geekcom.org}"
 
 CFG_DIR="${HOME}/.scripts/geekcom-deck-tools"
 WG_CONF="${CFG_DIR}/client.conf"
-MAX_CONFIGS=4
 
 SESSION_ID=""
 HAVE_SESSION=0
 TUNNEL_UP=0
 FINISH_SENT=0
 
-# Пароль sudo, который передаёт GUI (если есть)
+# Глобальные статусы/поля для работы с оркестратором
+API_HTTP_CODE=""
+API_BODY=""
+
+LAST_API_STATUS=""
+LAST_CONFIG_TEXT=""
+
+ATTEMPT=0
+CURRENT_SERVER=""
+CURRENT_ENDPOINT=""
+OP_STATUS=""
+
+# Пароль sudo, который передаёт GUI или nogui.sh (если есть)
 SUDO_PASS="${GDT_SUDO_PASS:-}"
 
 mkdir -p "$CFG_DIR"
@@ -56,7 +67,7 @@ need_cmd() {
   fi
 }
 
-# Унифицированный sudo: если есть пароль от GUI — используем его,
+# Унифицированный sudo: если есть пароль от GUI/nogui — используем его,
 # иначе работаем с уже активным sudo -n.
 run_sudo() {
   if [[ -n "$SUDO_PASS" ]]; then
@@ -105,6 +116,82 @@ print_endpoint_from_config() {
   grep -E '^[[:space:]]*Endpoint[[:space:]]*=' || true
 }
 
+detect_server_from_config() {
+  CURRENT_ENDPOINT=""
+  CURRENT_SERVER="unknown"
+
+  local line ep host
+
+  if [[ -f "$WG_CONF" ]]; then
+    line="$(grep -m1 -E '^[[:space:]]*Endpoint[[:space:]]*=' "$WG_CONF" || true)"
+  else
+    line="$(printf '%s\n' "$LAST_CONFIG_TEXT" | grep -m1 -E '^[[:space:]]*Endpoint[[:space:]]*=' || true)"
+  fi
+
+  if [[ -z "$line" ]]; then
+    return 0
+  fi
+
+  ep="${line#*=}"
+  ep="${ep#"${ep%%[![:space:]]*}"}"
+  ep="${ep%% *}"
+
+  CURRENT_ENDPOINT="$ep"
+  host="${ep%%:*}"
+
+  case "$host" in
+    wg.fix.geekcom.org)
+      CURRENT_SERVER="wg.fix"
+      ;;
+    xraypl.geekcom.org)
+      CURRENT_SERVER="xraypl"
+      ;;
+    xraynl.geekcom.org)
+      CURRENT_SERVER="xraynl"
+      ;;
+    xrayus.geekcom.org)
+      CURRENT_SERVER="xrayus"
+      ;;
+    77.238.245.29)
+      CURRENT_SERVER="wg-easy"
+      ;;
+    *)
+      CURRENT_SERVER="unknown"
+      ;;
+  esac
+}
+
+# ========= HTTP-ОБЁРТКА ДЛЯ API =========
+
+do_api_post() {
+  local path="$1"
+  local data="$2"
+
+  API_HTTP_CODE=""
+  API_BODY=""
+
+  local tmp
+  tmp="$(mktemp 2>/dev/null || printf '%s\n' "/tmp/gdt_api_$$")"
+  local http_code
+
+  if ! http_code="$(
+    curl -sS -o "$tmp" -w '%{http_code}' \
+      -X POST "${BASE_URL}${path}" \
+      -H 'content-type: application/json' \
+      -d "$data" 2>/dev/null
+  )"; then
+    API_HTTP_CODE="000"
+    API_BODY=""
+    rm -f "$tmp" 2>/dev/null || true
+    return 0
+  fi
+
+  API_HTTP_CODE="$http_code"
+  API_BODY="$(cat "$tmp" 2>/dev/null || printf '')"
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
 # ========= ОЧИСТКА (trap) =========
 
 cleanup() {
@@ -125,7 +212,7 @@ cleanup() {
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
     log_info "Отправляем завершение сессии (result=cancelled)..." \
              "Sending session finish (result=cancelled)..."
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
+    curl -sS -X POST "${BASE_URL}/api/v1/vpn/finish" \
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"cancelled\"}" \
       >/dev/null 2>&1 || true
@@ -152,7 +239,7 @@ need_cmd wg-quick
 need_cmd ping
 
 # Проверка sudo:
-#  - если GUI передал пароль (SUDO_PASS не пустой) — работаем через него;
+#  - если есть пароль (SUDO_PASS не пустой) — работаем через него;
 #  - если пароля нет — требуем активный sudo -n.
 if [[ -z "$SUDO_PASS" ]] && ! sudo -n true 2>/dev/null; then
   log_err "sudo не активен. Сначала нажмите кнопку sudo внизу и введите пароль." \
@@ -167,108 +254,198 @@ log_info "Действие: ${ACTION}" \
 log_info "Базовый URL оркестратора: ${BASE_URL}" \
          "Orchestrator base URL: ${BASE_URL}"
 
-# ========= ЗАПРОС КОНФИГА У ОРКЕСТРАТОРА =========
+# ========= РАБОТА С ОРКЕСТРАТОРОМ =========
 
 request_initial_config() {
   local reason="$1"
 
-  >&2 log_info \
-    "Запрашиваем конфигурацию VPN через /vpn/request (reason=${reason})..." \
-    "Requesting VPN config via /vpn/request (reason=${reason})..."
+  log_info \
+    "Запрашиваем конфигурацию VPN через /api/v1/vpn/request (reason=${reason})..." \
+    "Requesting VPN config via /api/v1/vpn/request (reason=${reason})..."
 
-  local res
-  res=$(
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/request" \
-      -H 'content-type: application/json' \
-      -d "{\"reason\":\"${reason}\"}"
-  )
+  LAST_API_STATUS=""
+  LAST_CONFIG_TEXT=""
 
-  SESSION_ID="$(printf '%s' "$res" | json_get session_id || true)"
-  local config_text
-  config_text="$(printf '%s' "$res" | json_get config_text || true)"
+  do_api_post "/api/v1/vpn/request" "{\"reason\":\"${reason}\"}"
 
-  if [[ -z "$SESSION_ID" || -z "$config_text" ]]; then
-    >&2 log_err \
-      "Не удалось получить session_id или config_text от сервиса." \
-      "Failed to get session_id or config_text from the service."
-    >&2 echo "$res"
-    return 1
-  fi
+  case "$API_HTTP_CODE" in
+    200)
+      SESSION_ID="$(printf '%s' "$API_BODY" | json_get session_id || true)"
+      LAST_CONFIG_TEXT="$(printf '%s' "$API_BODY" | json_get config_text || true)"
 
-  HAVE_SESSION=1
-  >&2 log_info \
-    "Получен session_id=${SESSION_ID}" \
-    "Got session_id=${SESSION_ID}"
+      if [[ -z "$SESSION_ID" || -z "$LAST_CONFIG_TEXT" ]]; then
+        log_err "Ответ оркестратора не содержит session_id или config_text." \
+                "Orchestrator response does not contain session_id or config_text."
+        LAST_API_STATUS="BACKEND_ERROR_UNKNOWN"
+        return 0
+      fi
 
-  # В stdout — только конфиг, без логов
-  printf '%s\n' "$config_text"
-  return 0
+      HAVE_SESSION=1
+      log_info "Получен session_id=${SESSION_ID}" \
+               "Got session_id=${SESSION_ID}"
+      LAST_API_STATUS="OK"
+      return 0
+      ;;
+    404)
+      LAST_API_STATUS="SESSION_NOT_FOUND"
+      return 0
+      ;;
+    503)
+      local detail
+      detail="$(printf '%s' "$API_BODY" | json_get detail || true)"
+      case "$detail" in
+        all_backends_exhausted_for_client_and_reason)
+          LAST_API_STATUS="EXHAUSTED"
+          ;;
+        no_backend_available_on_unused_servers)
+          LAST_API_STATUS="NO_BACKENDS_AVAILABLE"
+          ;;
+        *)
+          LAST_API_STATUS="BACKEND_ERROR_UNKNOWN"
+          ;;
+      esac
+      return 0
+      ;;
+    000)
+      LAST_API_STATUS="NETWORK_ERROR"
+      return 0
+      ;;
+    *)
+      LAST_API_STATUS="BACKEND_ERROR_UNKNOWN"
+      return 0
+      ;;
+  esac
 }
 
 request_next_config() {
-  >&2 log_info \
-    "Запрашиваем следующую конфигурацию через /vpn/report-broken..." \
-    "Requesting next configuration via /vpn/report-broken..."
+  log_info \
+    "Запрашиваем следующую конфигурацию через /api/v1/vpn/report-broken..." \
+    "Requesting next VPN config via /api/v1/vpn/report-broken..."
 
-  local res
-  res=$(
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
-      -H 'content-type: application/json' \
-      -d "{\"session_id\":\"${SESSION_ID}\"}"
-  )
+  LAST_API_STATUS=""
+  LAST_CONFIG_TEXT=""
 
-  local new_sid
-  new_sid="$(printf '%s' "$res" | json_get new_session_id || true)"
-  if [[ -n "$new_sid" ]]; then
-    SESSION_ID="$new_sid"
-    >&2 log_info \
-      "Обновлён session_id=${SESSION_ID}" \
-      "Updated session_id=${SESSION_ID}"
-  fi
+  do_api_post "/api/v1/vpn/report-broken" "{\"session_id\":\"${SESSION_ID}\"}"
 
-  local config_text
-  config_text="$(printf '%s' "$res" | json_get config_text || true)"
-  if [[ -z "$config_text" ]]; then
-    >&2 log_err \
-      "Сервис не вернул config_text. Возможно, лимит попыток исчерпан." \
-      "Service did not return config_text. Max attempts may be exceeded."
-    >&2 echo "$res"
-    return 1
-  fi
+  case "$API_HTTP_CODE" in
+    200)
+      local new_sid
+      new_sid="$(printf '%s' "$API_BODY" | json_get new_session_id || true)"
+      if [[ -n "$new_sid" ]]; then
+        SESSION_ID="$new_sid"
+        HAVE_SESSION=1
+        log_info "Обновлён session_id=${SESSION_ID}" \
+                 "Updated session_id=${SESSION_ID}"
+      fi
 
-  printf '%s\n' "$config_text"
-  return 0
+      LAST_CONFIG_TEXT="$(printf '%s' "$API_BODY" | json_get config_text || true)"
+      if [[ -z "$LAST_CONFIG_TEXT" ]]; then
+        log_err "Ответ оркестратора не содержит config_text." \
+                "Orchestrator response does not contain config_text."
+        LAST_API_STATUS="BACKEND_ERROR_UNKNOWN"
+        return 0
+      fi
+
+      LAST_API_STATUS="OK"
+      return 0
+      ;;
+    404)
+      LAST_API_STATUS="SESSION_NOT_FOUND"
+      return 0
+      ;;
+    503)
+      local detail
+      detail="$(printf '%s' "$API_BODY" | json_get detail || true)"
+      case "$detail" in
+        all_backends_exhausted_for_client_and_reason)
+          LAST_API_STATUS="EXHAUSTED"
+          ;;
+        no_backend_available_on_unused_servers)
+          LAST_API_STATUS="NO_BACKENDS_AVAILABLE"
+          ;;
+        *)
+          LAST_API_STATUS="BACKEND_ERROR_UNKNOWN"
+          ;;
+      esac
+      return 0
+      ;;
+    000)
+      LAST_API_STATUS="NETWORK_ERROR"
+      return 0
+      ;;
+    *)
+      LAST_API_STATUS="BACKEND_ERROR_UNKNOWN"
+      return 0
+      ;;
+  esac
 }
 
 # ========= ПОДЪЁМ VPN =========
 
 ensure_vpn_up() {
   local reason="$1"
-  local attempt=1
-  local config_text=""
   local mode="initial"
 
-  while (( attempt <= MAX_CONFIGS )); do
-    log_info "=== Попытка ${attempt}/${MAX_CONFIGS} поднять VPN ===" \
-             "=== Attempt ${attempt}/${MAX_CONFIGS} to bring VPN up ==="
+  while :; do
+    ATTEMPT=$((ATTEMPT + 1))
+    log_info \
+      "=== Попытка ${ATTEMPT} поднять VPN (reason=${reason}) ===" \
+      "=== Attempt ${ATTEMPT} to bring VPN up (reason=${reason}) ==="
 
     if [[ "$mode" == "initial" ]]; then
-      if ! config_text="$(request_initial_config "$reason")"; then
-        return 1
-      fi
-      mode="next"
+      request_initial_config "$reason"
     else
-      if ! config_text="$(request_next_config)"; then
-        return 1
-      fi
+      request_next_config
     fi
 
+    case "$LAST_API_STATUS" in
+      OK)
+        ;;
+      EXHAUSTED)
+        OP_STATUS="exhausted_all_backends"
+        log_err \
+          "Оркестратор: все сервера для этой операции уже исчерпаны." \
+          "Orchestrator: all backends for this operation are exhausted."
+        return 2
+        ;;
+      NO_BACKENDS_AVAILABLE)
+        OP_STATUS="servers_temporarily_unavailable"
+        log_err \
+          "Оркестратор: оставшиеся сервера сейчас недоступны." \
+          "Orchestrator: remaining backends are currently unavailable."
+        return 3
+        ;;
+      SESSION_NOT_FOUND)
+        OP_STATUS="session_gone"
+        log_err \
+          "Оркестратор: сессия не найдена (session_not_found)." \
+          "Orchestrator: session not found (session_not_found)."
+        return 4
+        ;;
+      NETWORK_ERROR)
+        OP_STATUS="network_or_protocol_error"
+        log_err \
+          "Сетевая ошибка при обращении к оркестратору." \
+          "Network error while talking to orchestrator."
+        return 5
+        ;;
+      BACKEND_ERROR_UNKNOWN|*)
+        OP_STATUS="network_or_protocol_error"
+        log_err \
+          "Неожиданный ответ оркестратора (HTTP=${API_HTTP_CODE})." \
+          "Unexpected orchestrator response (HTTP=${API_HTTP_CODE})."
+        return 6
+        ;;
+    esac
+
+    # На этом этапе у нас есть LAST_CONFIG_TEXT
     log_info "Сохраняем конфиг в ${WG_CONF}..." \
              "Saving config to ${WG_CONF}..."
-    printf '%s\n' "$config_text" > "$WG_CONF"
+    printf '%s\n' "$LAST_CONFIG_TEXT" > "$WG_CONF"
 
-    log_info "Удаляем строки DNS= из конфига (SteamOS без resolvconf)..." \
-             "Removing DNS= lines from config (SteamOS without resolvconf)..."
+    log_info \
+      "Удаляем строки DNS= из конфига (SteamOS без resolvconf)..." \
+      "Removing DNS= lines from config (SteamOS without resolvconf)..."
     sed -i '/^[[:space:]]*DNS[[:space:]]*=/d' "$WG_CONF" || true
 
     chmod 600 "$WG_CONF" || true
@@ -276,6 +453,12 @@ ensure_vpn_up() {
     log_info "Endpoint конфигурации:" \
              "Config endpoint:"
     print_endpoint_from_config < "$WG_CONF" || true
+    detect_server_from_config
+    if [[ -n "$CURRENT_ENDPOINT" ]]; then
+      log_info \
+        "Определён сервер: ${CURRENT_SERVER}, endpoint=${CURRENT_ENDPOINT}" \
+        "Detected server: ${CURRENT_SERVER}, endpoint=${CURRENT_ENDPOINT}"
+    fi
 
     # Чистим хвосты от прошлых запусков
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
@@ -284,12 +467,13 @@ ensure_vpn_up() {
     log_info "Поднимаем туннель: wg-quick up ${WG_CONF}" \
              "Bringing tunnel up: wg-quick up ${WG_CONF}"
     if ! run_sudo wg-quick up "$WG_CONF"; then
-      log_err "Не удалось поднять туннель на этой конфигурации." \
-              "Failed to bring tunnel up with this configuration."
+      log_err \
+        "Не удалось поднять туннель на этой конфигурации. Запросим другой конфиг у оркестратора." \
+        "Failed to bring tunnel up with this configuration. Will ask orchestrator for another config."
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
-      ((attempt++))
+      mode="next"
       continue
     fi
 
@@ -306,34 +490,59 @@ ensure_vpn_up() {
     log_info "Проверяем доступность 8.8.8.8 через ping..." \
              "Checking reachability of 8.8.8.8 via ping..."
     if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-      log_info "Пинг 8.8.8.8 успешен. VPN выглядит рабочим." \
-               "Ping to 8.8.8.8 successful. VPN looks OK."
+      log_info \
+        "Пинг 8.8.8.8 успешен. VPN выглядит рабочим." \
+        "Ping to 8.8.8.8 successful. VPN looks OK."
       return 0
     else
-      log_err "Пинг 8.8.8.8 не прошёл. Пробуем следующую конфигурацию..." \
-              "Ping to 8.8.8.8 failed. Trying next configuration..."
+      log_err \
+        "Пинг 8.8.8.8 не прошёл. Пробуем другую конфигурацию через /vpn/report-broken..." \
+        "Ping to 8.8.8.8 failed. Will request another config via /vpn/report-broken..."
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
-      ((attempt++))
+      mode="next"
       continue
     fi
   done
-
-  log_err "Не удалось поднять рабочий VPN за ${MAX_CONFIGS} попыток." \
-          "Failed to obtain a working VPN in ${MAX_CONFIGS} attempts."
-  return 1
 }
 
 finish_session() {
   local result="$1"  # success | cancelled
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
-    log_info "Отправляем finish(result=${result}) для session_id=${SESSION_ID}..." \
-             "Sending finish(result=${result}) for session_id=${SESSION_ID}..."
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
-      -H 'content-type: application/json' \
-      -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
-      >/dev/null 2>&1 || true
+    log_info \
+      "Отправляем finish(result=${result}) для session_id=${SESSION_ID}..." \
+      "Sending finish(result=${result}) for session_id=${SESSION_ID}..."
+
+    do_api_post "/api/v1/vpn/finish" "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}"
+
+    case "$API_HTTP_CODE" in
+      200)
+        local already
+        already="$(printf '%s' "$API_BODY" | json_get already_finalized || true)"
+        if [[ "$already" == "true" ]]; then
+          log_info \
+            "Сессия уже была завершена ранее (already_finalized=true)." \
+            "Session was already finalized earlier (already_finalized=true)."
+        fi
+        ;;
+      404)
+        log_info \
+          "finish: сессия не найдена на стороне оркестратора (session_not_found)." \
+          "finish: session not found on orchestrator side (session_not_found)."
+        ;;
+      000)
+        log_err \
+          "finish: сетевая ошибка при отправке результата в оркестратор." \
+          "finish: network error while sending result to orchestrator."
+        ;;
+      *)
+        log_info \
+          "finish: неожиданный HTTP-код от оркестратора: ${API_HTTP_CODE}." \
+          "finish: unexpected HTTP code from orchestrator: ${API_HTTP_CODE}."
+        ;;
+    esac
+
     FINISH_SENT=1
   fi
 
@@ -350,15 +559,25 @@ finish_session() {
   fi
 }
 
-# ========= УНИВЕРСАЛЬНАЯ ОБЁРТКА ДЛЯ ДЕЙСТВИЙ =========
+# ========= УНИВЕРСАЛЬНАЯ ОБЁРТКА ДЛЯ VPN-ДЕЙСТВИЙ =========
 
 run_with_vpn() {
   local reason="$1"
   shift
 
+  log_info \
+    "Запуск операции с VPN (reason=${reason})..." \
+    "Starting VPN operation (reason=${reason})..."
+
+  OP_STATUS=""
+
   if ! ensure_vpn_up "$reason"; then
-    log_err "Не удалось получить рабочее VPN-подключение." \
-            "Failed to obtain a working VPN connection."
+    if [[ -z "$OP_STATUS" ]]; then
+      OP_STATUS="network_or_protocol_error"
+    fi
+    log_info \
+      "Финальный статус операции: ${OP_STATUS}" \
+      "Final operation status: ${OP_STATUS}"
     return 1
   fi
 
@@ -366,10 +585,16 @@ run_with_vpn() {
   "$@" || status=$?
 
   if (( status == 0 )); then
+    OP_STATUS="completed_with_server=${CURRENT_SERVER:-unknown}"
     finish_session "success"
   else
+    OP_STATUS="client_aborted"
     finish_session "cancelled"
   fi
+
+  log_info \
+    "Финальный статус операции: ${OP_STATUS}" \
+    "Final operation status: ${OP_STATUS}"
 
   return "$status"
 }
@@ -378,20 +603,33 @@ run_with_vpn() {
 
 case "$ACTION" in
   openh264_fix)
-    # Чистый фикс кодека, без обязательного обновления системы
+    # Чистый фикс кодека через оркестратор
     run_with_vpn "fix_openh264" "$CFG_DIR/actions/openh264_fix.sh"
     ;;
   steamos_update)
-    # Системное обновление: проходит как system_update для оркестратора
+    # Обновление SteamOS: reason=system_update
     run_with_vpn "system_update" "$CFG_DIR/actions/steamos_update.sh"
     ;;
   flatpak_update)
-    # Обновление flatpak’ов тоже идёт как system_update
+    # Обновление flatpak: тоже reason=system_update
     run_with_vpn "system_update" "$CFG_DIR/actions/flatpak_update.sh"
     ;;
   antizapret)
-    # Антизапрет-туннель: с точки зрения сервиса тоже system_update
-    run_with_vpn "system_update" "$CFG_DIR/actions/antizapret.sh"
+    # Антизапрет — локальная история, без оркестратора и без VPN-сессий
+    log_info \
+      "Запуск Geekcom antizapret (без VPN-оркестратора)..." \
+      "Starting Geekcom antizapret (without VPN orchestrator)..."
+    ANTIZAPRET_STATUS=0
+    run_sudo "$CFG_DIR/actions/antizapret.sh" || ANTIZAPRET_STATUS=$?
+    if (( ANTIZAPRET_STATUS == 0 )); then
+      log_info \
+        "antizapret завершён успешно." \
+        "antizapret completed successfully."
+    else
+      log_err \
+        "antizapret завершился с ошибкой (код ${ANTIZAPRET_STATUS})." \
+        "antizapret finished with error (code ${ANTIZAPRET_STATUS})."
+    fi
     ;;
   *)
     log_err "Неизвестное действие: ${ACTION}" \
