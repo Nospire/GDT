@@ -64,19 +64,14 @@ flush_dns() {
   fi
 }
 
-# ========= SUDO HANDLING =========
+# ========= SUDO PASSWORD =========
 
 read_sudo_password() {
   if [[ -n "$GDT_SUDO_PASS" ]]; then
-    if printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
-      echo "[INFO] Using sudo password from environment."
-      return 0
-    else
-      echo "[ERR] Provided sudo password is not valid." >&2
-      exit 1
-    fi
+    return 0
   fi
 
+  # Всегда читаем с /dev/tty, чтобы работало и в curl | bash
   printf "Enter sudo password (input will be hidden): " > /dev/tty
   stty -echo </dev/tty
   IFS= read -r GDT_SUDO_PASS </dev/tty || true
@@ -88,6 +83,7 @@ read_sudo_password() {
     exit 1
   fi
 
+  # Validate sudo password
   if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
     echo "[ERR] Wrong sudo password." >&2
     exit 1
@@ -96,21 +92,45 @@ read_sudo_password() {
   export GDT_SUDO_PASS
 }
 
-# ========= CLEANUP / TRAP =========
+# ========= SESSION FINISH & CLEANUP =========
 
 finish_session() {
   local result="$1"  # success | cancelled
+
+  # 1) Всегда сначала гасим туннель и чистим конфиг — /finish должен идти вне VPN
+  if (( TUNNEL_UP )); then
+    echo "[INFO] Bringing tunnel down (wg-quick down) before sending status..."
+    run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
+    run_sudo ip link del client >/dev/null 2>&1 || true
+    TUNNEL_UP=0
+  fi
+
+  if [[ -f "$WG_CONF" ]]; then
+    echo "[INFO] Removing temporary VPN config."
+    rm -f "$WG_CONF" || true
+  fi
+
+  # 2) Только после этого шлём /finish в оркестратор
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
-    echo "[INFO] Sending /api/v1/vpn/finish(result=${result}) for current session..."
-    curl -sS -X POST "${BASE_URL}/api/v1/vpn/finish" \
-      -H 'content-type: application/json' \
-      -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
-      >/dev/null 2>&1 || true
+    echo "[INFO] Sending /vpn/finish(result=${result})..."
+    if ! curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
+        -H 'content-type: application/json' \
+        -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
+        >/dev/null 2>&1; then
+      echo "[ERR] finish: network error while sending result to orchestrator." >&2
+    fi
     FINISH_SENT=1
   fi
 }
 
 cleanup() {
+  # Если сессия есть, но finish ещё не отправлен — считаем, что это отмена
+  if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
+    finish_session "cancelled"
+    return
+  fi
+
+  # Если сессии нет или она уже финализирована — просто чистим VPN
   if (( TUNNEL_UP )); then
     echo "[INFO] Bringing tunnel down (wg-quick down)..."
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
@@ -122,84 +142,86 @@ cleanup() {
     echo "[INFO] Removing temporary VPN config."
     rm -f "$WG_CONF" || true
   fi
-
-  if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
-    echo "[INFO] Finishing session as cancelled..."
-    finish_session "cancelled"
-  fi
 }
 
 trap 'cleanup' EXIT INT TERM
 
-# ========= ORCHEСТРАТОР: CONFIG =========
+# ========= ORCHESTRATOR: REQUEST CONFIG =========
 
 request_initial_config() {
   local reason="$1"
 
-  echo "[INFO] Requesting initial VPN config (reason=${reason})..." >&2
+  echo "[INFO] Requesting initial VPN config (reason=${reason})..."
   local res
-  if ! res=$(
-    curl -sS -X POST "${BASE_URL}/api/v1/vpn/request" \
+  res=$(
+    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/request" \
       -H 'content-type: application/json' \
       -d "{\"reason\":\"${reason}\"}"
-  ); then
-    echo "[ERR] Network error while talking to orchestrator (request)." >&2
-    return 1
-  fi
+  )
 
   SESSION_ID="$(printf '%s' "$res" | json_get session_id || true)"
   local config_text
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
 
   if [[ -z "$SESSION_ID" || -z "$config_text" ]]; then
-    echo "[ERR] Orchestrator did not return session_id or config_text." >&2
+    echo "[ERR] Failed to get session_id or config_text from orchestrator." >&2
     echo "$res" >&2
     return 1
   fi
 
   HAVE_SESSION=1
-  echo "[INFO] Got session_id from orchestrator." >&2
+  echo "[INFO] Got session_id from orchestrator."
 
+  # В stdout возвращаем только конфиг, без логов
   printf '%s\n' "$config_text"
   return 0
 }
 
 request_next_config() {
-  echo "[INFO] Requesting next VPN config (report-broken)..." >&2
+  echo "[INFO] Requesting next VPN config (report-broken)..."
 
-  local res
-  if ! res=$(
-    curl -sS -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
+  # Берём и тело, и HTTP-код одним вызовом
+  local http_code
+  local body
+  body=$(
+    curl -sS -w '%{http_code}' -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\"}"
-  ); then
-    echo "[ERR] Network error while talking to orchestrator (report-broken)." >&2
+  ) || {
+    echo "[ERR] Failed to call /api/v1/vpn/report-broken on ${BASE_URL}." >&2
+    return 1
+  }
+
+  http_code="${body: -3}"
+  body="${body::-3}"
+
+  if [[ "$http_code" != "200" ]]; then
+    echo "[ERR] Orchestrator returned HTTP ${http_code} for /vpn/report-broken." >&2
+    if [[ -n "$body" ]]; then
+      # Печатаем JSON-ответ для диагностики
+      echo "$body" >&2
+      # Попробуем вытащить detail, если это JSON
+      local detail
+      detail="$(printf '%s' "$body" | json_get detail || true)"
+      if [[ -n "$detail" ]]; then
+        echo "[ERR] Orchestrator reported: ${detail}. No more configs available." >&2
+      fi
+    fi
     return 1
   fi
 
-  local detail
-  detail="$(printf '%s' "$res" | json_get detail || true)"
-
-  case "$detail" in
-    all_backends_exhausted_for_client_and_reason|no_backend_available_on_unused_servers|session_not_found)
-      echo "[ERR] Orchestrator reported: ${detail}. No more configs available." >&2
-      echo "$res" >&2
-      return 1
-      ;;
-  esac
-
   local new_sid
-  new_sid="$(printf '%s' "$res" | json_get new_session_id || true)"
+  new_sid="$(printf '%s' "$body" | json_get new_session_id || true)"
   if [[ -n "$new_sid" ]]; then
     SESSION_ID="$new_sid"
-    echo "[INFO] Switched to new session_id from orchestrator." >&2
+    echo "[INFO] Updated session_id from orchestrator."
   fi
 
   local config_text
-  config_text="$(printf '%s' "$res" | json_get config_text || true)"
+  config_text="$(printf '%s' "$body" | json_get config_text || true)"
   if [[ -z "$config_text" ]]; then
-    echo "[ERR] Orchestrator did not return config_text for next VPN config." >&2
-    echo "$res" >&2
+    echo "[ERR] Orchestrator did not return config_text. Maybe attempts limit reached." >&2
+    echo "$body" >&2
     return 1
   fi
 
@@ -237,19 +259,18 @@ ensure_vpn_up() {
 
     chmod 600 "$WG_CONF" || true
 
-    # Без деталей Endpoint, только факт
-    echo "[INFO] VPN config prepared."
-
+    # Clean leftovers from previous runs
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
     run_sudo ip link del client >/dev/null 2>&1 || true
 
+    echo "[INFO] VPN config prepared."
     echo "[INFO] Bringing tunnel up via wg-quick..."
     if ! run_sudo wg-quick up "$WG_CONF"; then
       echo "[WARN] Failed to bring tunnel up with this config." >&2
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
-      attempt=$((attempt+1))
+      ((attempt++))
       continue
     fi
 
@@ -270,7 +291,8 @@ ensure_vpn_up() {
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
-      attempt=$((attempt+1))
+      ((attempt++))
+      # next iteration will use report-broken
       continue
     fi
   done
@@ -286,36 +308,22 @@ run_steamos_update() {
   fi
 
   echo "[INFO] Running 'steamos-update check'..."
-  local check_output=""
-  local check_rc=0
-
-  check_output="$(run_sudo steamos-update check 2>&1)" || check_rc=$?
-  echo "${check_output}"
-
-  if (( check_rc != 0 )); then
-    if echo "$check_output" | grep -qi "No update available"; then
+  local rc=0
+  if ! run_sudo steamos-update check; then
+    rc=$?
+    if (( rc == 7 )); then
       echo "[INFO] No SteamOS updates available. Nothing to do."
       return 0
-    else
-      echo "[ERR] 'steamos-update check' failed with code ${check_rc}." >&2
-      return 1
     fi
+    echo "[ERR] 'steamos-update check' failed with code ${rc}." >&2
+    return "$rc"
   fi
 
   echo "[INFO] Running full 'steamos-update'..."
-  local update_output=""
-  local update_rc=0
-
-  update_output="$(run_sudo steamos-update 2>&1)" || update_rc=$?
-  echo "${update_output}"
-
-  if (( update_rc != 0 )); then
-    if echo "$update_output" | grep -qi "No update available"; then
-      echo "[INFO] No SteamOS updates available during full update. Nothing to do."
-      return 0
-    fi
-    echo "[ERR] 'steamos-update' failed with code ${update_rc}." >&2
-    return 1
+  if ! run_sudo steamos-update; then
+    rc=$?
+    echo "[ERR] 'steamos-update' failed with code ${rc}." >&2
+    return "$rc"
   fi
 
   echo "[INFO] SteamOS update command finished."
@@ -335,8 +343,10 @@ run_with_vpn() {
 
   if (( status == 0 )); then
     finish_session "success"
+    echo "[INFO] SteamOS update finished successfully."
   else
     finish_session "cancelled"
+    echo "[ERR] SteamOS update failed." >&2
   fi
 
   return "$status"
@@ -351,13 +361,12 @@ need_cmd curl
 need_cmd wg-quick
 need_cmd ping
 need_cmd sudo
+need_cmd steamos-update
 
 read_sudo_password
 
 if run_with_vpn "system_update"; then
-  echo "[INFO] SteamOS update finished successfully."
   exit 0
 else
-  echo "[ERR] SteamOS update failed." >&2
   exit 1
 fi
