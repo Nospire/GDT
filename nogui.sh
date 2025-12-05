@@ -334,19 +334,23 @@ run_steamos_update() {
     return 1
   fi
 
-  log "Running 'steamos-update check' (may exit non-zero)..."
+  log "Running 'steamos-update check' (may exit with 0 or 7)..."
   run_sudo steamos-update check
   local check_code=$?
-  if (( check_code != 0 )); then
-    warn "'steamos-update check' exited with code ${check_code} (no updates or non-critical error)."
+  if (( check_code != 0 && check_code != 7 )); then
+    warn "'steamos-update check' exited with code ${check_code} (unexpected error)."
   fi
 
-  log "Running full 'steamos-update'..."
+  log "Running full 'steamos-update' (0 or 7 are treated as success)..."
   run_sudo steamos-update
   local upd_code=$?
-  if (( upd_code != 0 )); then
+  if (( upd_code != 0 && upd_code != 7 )); then
     err "'steamos-update' failed with code ${upd_code}."
     return "$upd_code"
+  fi
+
+  if (( upd_code == 7 )); then
+    log "'steamos-update' returned 7 (no updates available); treating as success."
   fi
 
   log "SteamOS update command finished."
