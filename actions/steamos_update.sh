@@ -21,17 +21,52 @@ if ! command -v steamos-update >/dev/null 2>&1; then
 fi
 
 echo "[INFO] Running 'steamos-update check'..."
-# STDERR steamos-update сразу отправляем в STDOUT, чтобы GUI не ставил [ERR]
-if ! run_sudo steamos-update check 2>&1; then
-  echo "[ERR] 'steamos-update check' failed." >&2
-  exit 1
+CHECK_OUTPUT=""
+CHECK_RC=0
+
+# STDERR steamos-update сразу отправляем в STDOUT, чтобы GUI не лепил лишних [ERR]
+if CHECK_OUTPUT="$(run_sudo steamos-update check 2>&1)"; then
+  CHECK_RC=0
+else
+  CHECK_RC=$?
 fi
 
-echo "[INFO] Running full 'steamos-update'..."
-# То же самое для основного обновления
-if ! run_sudo steamos-update 2>&1; then
-  echo "[ERR] 'steamos-update' failed." >&2
-  exit 1
+# Печатаем вывод check, чтобы он был виден в логе GUI
+if [[ -n "$CHECK_OUTPUT" ]]; then
+  printf '%s\n' "$CHECK_OUTPUT"
 fi
 
-echo "[INFO] SteamOS update command finished."
+# Случай "No update available" — считаем УСПЕХОМ
+if printf '%s\n' "$CHECK_OUTPUT" | grep -qi "no update available"; then
+  echo "[INFO] No SteamOS updates available. Nothing to do."
+  exit 0
+fi
+
+# Остальные ненулевые коды — реальные ошибки
+if [[ $CHECK_RC -ne 0 ]]; then
+  echo "[ERR] 'steamos-update check' failed with exit code ${CHECK_RC}." >&2
+  exit "$CHECK_RC"
+fi
+
+echo "[INFO] Updates appear to be available. Running 'steamos-update'..."
+
+UPDATE_OUTPUT=""
+UPDATE_RC=0
+
+if UPDATE_OUTPUT="$(run_sudo steamos-update 2>&1)"; then
+  UPDATE_RC=0
+else
+  UPDATE_RC=$?
+fi
+
+if [[ -n "$UPDATE_OUTPUT" ]]; then
+  printf '%s\n' "$UPDATE_OUTPUT"
+fi
+
+if [[ $UPDATE_RC -eq 0 ]]; then
+  echo "[INFO] 'steamos-update' finished successfully."
+  exit 0
+else
+  echo "[ERR] 'steamos-update' failed with exit code ${UPDATE_RC}." >&2
+  exit "$UPDATE_RC"
+fi
