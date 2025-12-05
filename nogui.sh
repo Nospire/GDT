@@ -96,28 +96,18 @@ read_sudo_password() {
   export GDT_SUDO_PASS
 }
 
-# ========= FINISH + CLEANUP =========
+# ========= CLEANUP / TRAP =========
 
 finish_session() {
   local result="$1"  # success | cancelled
-
-  if (( ! HAVE_SESSION )); then
-    return 0
+  if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
+    echo "[INFO] Sending /api/v1/vpn/finish(result=${result}) for current session..."
+    curl -sS -X POST "${BASE_URL}/api/v1/vpn/finish" \
+      -H 'content-type: application/json' \
+      -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
+      >/dev/null 2>&1 || true
+    FINISH_SENT=1
   fi
-  if (( FINISH_SENT )); then
-    return 0
-  fi
-
-  echo "[INFO] Sending finish(result=${result}) to orchestrator for current session..."
-  if ! curl -sS -X POST "${BASE_URL}/api/v1/vpn/finish" \
-        -H 'content-type: application/json' \
-        -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
-        >/dev/null 2>&1; then
-    echo "[ERR] finish: network error while reporting result to orchestrator." >&2
-    # всё равно считаем, что попытались
-  fi
-
-  FINISH_SENT=1
 }
 
 cleanup() {
@@ -133,16 +123,15 @@ cleanup() {
     rm -f "$WG_CONF" || true
   fi
 
-  # Если по какой-то причине не успели отправить finish — закрываем как cancelled
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
-    echo "[INFO] Finishing session as cancelled (cleanup)."
+    echo "[INFO] Finishing session as cancelled..."
     finish_session "cancelled"
   fi
 }
 
 trap 'cleanup' EXIT INT TERM
 
-# ========= ORCHESTRАТОР: CONFIG =========
+# ========= ORCHEСТРАТОР: CONFIG =========
 
 request_initial_config() {
   local reason="$1"
@@ -154,7 +143,7 @@ request_initial_config() {
       -H 'content-type: application/json' \
       -d "{\"reason\":\"${reason}\"}"
   ); then
-    echo "[ERR] Network error while talking to orchestrator (/vpn/request)." >&2
+    echo "[ERR] Network error while talking to orchestrator (request)." >&2
     return 1
   fi
 
@@ -184,7 +173,7 @@ request_next_config() {
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\"}"
   ); then
-    echo "[ERR] Network error while talking to orchestrator (/vpn/report-broken)." >&2
+    echo "[ERR] Network error while talking to orchestrator (report-broken)." >&2
     return 1
   fi
 
@@ -248,6 +237,7 @@ ensure_vpn_up() {
 
     chmod 600 "$WG_CONF" || true
 
+    # Без деталей Endpoint, только факт
     echo "[INFO] VPN config prepared."
 
     run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
