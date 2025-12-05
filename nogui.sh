@@ -73,10 +73,10 @@ print_endpoint_from_config() {
 read_sudo_password() {
   if [[ -n "$GDT_SUDO_PASS" ]]; then
     if printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
-      echo "[INFO] Using sudo password from GDT_SUDO_PASS."
+      echo "[INFO] Using sudo password from environment."
       return 0
     else
-      echo "[ERR] Provided GDT_SUDO_PASS is not valid for sudo." >&2
+      echo "[ERR] Provided sudo password is not valid." >&2
       exit 1
     fi
   fi
@@ -105,8 +105,8 @@ read_sudo_password() {
 finish_session() {
   local result="$1"  # success | cancelled
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
-    echo "[INFO] Sending /api/v1/vpn/finish(result=${result}) for session_id=${SESSION_ID}..."
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
+    echo "[INFO] Sending /api/v1/vpn/finish(result=${result}) for current session..."
+    curl -sS -X POST "${BASE_URL}/api/v1/vpn/finish" \
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
       >/dev/null 2>&1 || true
@@ -135,19 +135,19 @@ cleanup() {
 
 trap 'cleanup' EXIT INT TERM
 
-# ========= ORCHEСТРАТОР: CONFIG =========
+# ========= ORCHESTRATOR: CONFIG =========
 
 request_initial_config() {
   local reason="$1"
 
-  echo "[INFO] Requesting VPN config via /api/v1/vpn/request (reason=${reason})..." >&2
+  echo "[INFO] Requesting initial VPN config (reason=${reason})..." >&2
   local res
   if ! res=$(
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/request" \
+    curl -sS -X POST "${BASE_URL}/api/v1/vpn/request" \
       -H 'content-type: application/json' \
       -d "{\"reason\":\"${reason}\"}"
   ); then
-    echo "[ERR] Network error while calling orchestrator (request)." >&2
+    echo "[ERR] Network error while talking to orchestrator (request)." >&2
     return 1
   fi
 
@@ -156,42 +156,54 @@ request_initial_config() {
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
 
   if [[ -z "$SESSION_ID" || -z "$config_text" ]]; then
-    echo "[ERR] Failed to get session_id or config_text from orchestrator." >&2
+    echo "[ERR] Orchestrator did not return session_id or config_text." >&2
     echo "$res" >&2
     return 1
   fi
 
   HAVE_SESSION=1
-  echo "[INFO] Got session_id=${SESSION_ID}" >&2
+  echo "[INFO] Got session_id from orchestrator." >&2
 
   printf '%s\n' "$config_text"
   return 0
 }
 
 request_next_config() {
-  echo "[INFO] Requesting next VPN config via /api/v1/vpn/report-broken..." >&2
+  echo "[INFO] Requesting next VPN config (report-broken)..." >&2
 
   local res
   if ! res=$(
-    curl -fsS -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
+    curl -sS -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\"}"
   ); then
-    echo "[ERR] Network error while calling orchestrator (report-broken)." >&2
+    echo "[ERR] Network error while talking to orchestrator (report-broken)." >&2
     return 1
   fi
+
+  local detail
+  detail="$(printf '%s' "$res" | json_get detail || true)"
+
+  # Если сервер говорит, что сессия не найдена или бэкенды кончились — выходим.
+  case "$detail" in
+    all_backends_exhausted_for_client_and_reason|no_backend_available_on_unused_servers|session_not_found)
+      echo "[ERR] Orchestrator reported: ${detail}. No more configs available." >&2
+      echo "$res" >&2
+      return 1
+      ;;
+  esac
 
   local new_sid
   new_sid="$(printf '%s' "$res" | json_get new_session_id || true)"
   if [[ -n "$new_sid" ]]; then
     SESSION_ID="$new_sid"
-    echo "[INFO] Updated session_id=${SESSION_ID}" >&2
+    echo "[INFO] Switched to new session_id from orchestrator." >&2
   fi
 
   local config_text
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
   if [[ -z "$config_text" ]]; then
-    echo "[ERR] Orchestrator did not return config_text. Maybe all backends exhausted." >&2
+    echo "[ERR] Orchestrator did not return config_text for next VPN config." >&2
     echo "$res" >&2
     return 1
   fi
@@ -259,7 +271,7 @@ ensure_vpn_up() {
       echo "[INFO] Ping to 8.8.8.8 OK. VPN looks fine."
       return 0
     else
-      echo "[WARN] Ping to 8.8.8.8 failed. Trying next config..." >&2
+      echo "[WARN] Ping to 8.8.8.8 failed. Asking orchestrator for another config..." >&2
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
