@@ -7,7 +7,6 @@ BASE_URL="${GDT_BASE_URL:-https://fix.geekcom.org}"
 
 CFG_DIR="${HOME}/.scripts/geekcom-deck-tools"
 WG_CONF="${CFG_DIR}/client.conf"
-MAX_CONFIGS=4
 
 SESSION_ID=""
 HAVE_SESSION=0
@@ -73,31 +72,27 @@ print_endpoint_from_config() {
 
 read_sudo_password() {
   if [[ -n "$GDT_SUDO_PASS" ]]; then
-    return 0
+    # уже есть в окружении — просто валидируем
+    if printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
+      echo "[INFO] Using sudo password from GDT_SUDO_PASS."
+      return 0
+    else
+      echo "[ERR] Provided GDT_SUDO_PASS is not valid for sudo." >&2
+      exit 1
+    fi
   fi
 
-  if [[ -t 0 ]]; then
-    # running directly in tty
-    printf "Enter sudo password (input will be hidden): " > /dev/tty
-    stty -echo </dev/tty
-    IFS= read -r GDT_SUDO_PASS </dev/tty || true
-    stty echo </dev/tty
-    printf "\n" > /dev/tty
-  else
-    # piped (curl | bash) — read from /dev/tty explicitly
-    printf "Enter sudo password (input will be hidden): " > /dev/tty
-    stty -echo </dev/tty
-    IFS= read -r GDT_SUDO_PASS </dev/tty || true
-    stty echo </dev/tty
-    printf "\n" > /dev/tty
-  fi
+  printf "Enter sudo password (input will be hidden): " > /dev/tty
+  stty -echo </dev/tty
+  IFS= read -r GDT_SUDO_PASS </dev/tty || true
+  stty echo </dev/tty
+  printf "\n" > /dev/tty
 
   if [[ -z "$GDT_SUDO_PASS" ]]; then
     echo "[ERR] Empty sudo password." >&2
     exit 1
   fi
 
-  # Validate sudo password
   if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
     echo "[ERR] Wrong sudo password." >&2
     exit 1
@@ -111,7 +106,7 @@ read_sudo_password() {
 finish_session() {
   local result="$1"  # success | cancelled
   if (( HAVE_SESSION )) && (( ! FINISH_SENT )); then
-    echo "[INFO] Sending /vpn/finish(result=${result}) for session_id=${SESSION_ID}..."
+    echo "[INFO] Sending /api/v1/vpn/finish(result=${result}) for session_id=${SESSION_ID}..."
     curl -fsS -X POST "${BASE_URL}/api/v1/vpn/finish" \
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\",\"result\":\"${result}\"}" \
@@ -146,13 +141,16 @@ trap 'cleanup' EXIT INT TERM
 request_initial_config() {
   local reason="$1"
 
-  echo "[INFO] Requesting VPN config via /vpn/request (reason=${reason})..."
+  echo "[INFO] Requesting VPN config via /api/v1/vpn/request (reason=${reason})..." >&2
   local res
-  res=$(
+  if ! res=$(
     curl -fsS -X POST "${BASE_URL}/api/v1/vpn/request" \
       -H 'content-type: application/json' \
       -d "{\"reason\":\"${reason}\"}"
-  )
+  ); then
+    echo "[ERR] Failed to call /api/v1/vpn/request on ${BASE_URL}." >&2
+    return 1
+  fi
 
   SESSION_ID="$(printf '%s' "$res" | json_get session_id || true)"
   local config_text
@@ -165,33 +163,37 @@ request_initial_config() {
   fi
 
   HAVE_SESSION=1
-  echo "[INFO] Got session_id=${SESSION_ID}"
+  echo "[INFO] Got session_id=${SESSION_ID}" >&2
 
+  # В stdout — только чистый WG-конфиг
   printf '%s\n' "$config_text"
   return 0
 }
 
 request_next_config() {
-  echo "[INFO] Requesting next VPN config via /vpn/report-broken..."
+  echo "[INFO] Requesting next VPN config via /api/v1/vpn/report-broken..." >&2
 
   local res
-  res=$(
+  if ! res=$(
     curl -fsS -X POST "${BASE_URL}/api/v1/vpn/report-broken" \
       -H 'content-type: application/json' \
       -d "{\"session_id\":\"${SESSION_ID}\"}"
-  )
+  ); then
+    echo "[ERR] Failed to call /api/v1/vpn/report-broken on ${BASE_URL}." >&2
+    return 1
+  fi
 
   local new_sid
   new_sid="$(printf '%s' "$res" | json_get new_session_id || true)"
   if [[ -n "$new_sid" ]]; then
     SESSION_ID="$new_sid"
-    echo "[INFO] Updated session_id=${SESSION_ID}"
+    echo "[INFO] Updated session_id=${SESSION_ID}" >&2
   fi
 
   local config_text
   config_text="$(printf '%s' "$res" | json_get config_text || true)"
   if [[ -z "$config_text" ]]; then
-    echo "[ERR] Service did not return config_text. Maybe attempts limit reached." >&2
+    echo "[ERR] Service did not return config_text. Maybe all backends exhausted." >&2
     echo "$res" >&2
     return 1
   fi
@@ -208,8 +210,8 @@ ensure_vpn_up() {
   local config_text=""
   local mode="initial"
 
-  while (( attempt <= MAX_CONFIGS )); do
-    echo "[INFO] === Attempt ${attempt}/${MAX_CONFIGS} to bring VPN up ==="
+  while :; do
+    echo "[INFO] === Attempt ${attempt} to bring VPN up (reason=${reason}) ==="
 
     if [[ "$mode" == "initial" ]]; then
       if ! config_text="$(request_initial_config "$reason")"; then
@@ -243,7 +245,7 @@ ensure_vpn_up() {
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
-      ((attempt++))
+      attempt=$((attempt+1))
       continue
     fi
 
@@ -264,22 +266,25 @@ ensure_vpn_up() {
       run_sudo wg-quick down "$WG_CONF" >/dev/null 2>&1 || true
       TUNNEL_UP=0
       rm -f "$WG_CONF" || true
-      ((attempt++))
+      attempt=$((attempt+1))
       continue
     fi
   done
-
-  echo "[ERR] Failed to obtain working VPN in ${MAX_CONFIGS} attempts." >&2
-  return 1
 }
 
 # ========= BUSINESS LOGIC: STEAMOS UPDATE =========
 
 run_steamos_update() {
+  echo "[INFO] Checking for steamos-update..."
+  if ! command -v steamos-update >/dev/null 2>&1; then
+    echo "[ERR] steamos-update command not found. This action is only for SteamOS." >&2
+    return 1
+  fi
+
   echo "[INFO] Running 'steamos-update check' (may exit non-zero)..."
   run_sudo steamos-update check || true
 
-  echo "[INFO] Running 'steamos-update'..."
+  echo "[INFO] Running full 'steamos-update'..."
   run_sudo steamos-update
 }
 
@@ -312,7 +317,6 @@ need_cmd curl
 need_cmd wg-quick
 need_cmd ping
 need_cmd sudo
-need_cmd steamos-update
 
 read_sudo_password
 
