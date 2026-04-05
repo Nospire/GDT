@@ -17,6 +17,8 @@ import {
   SetSudoPassword,
   SetSubscriptionURL,
   OpenTavern,
+  GetVersion,
+  CheckUpdate,
 } from '../wailsjs/go/main/App.js';
 
 import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime.js';
@@ -570,6 +572,20 @@ async function init() {
     updateSudo(sudoState || 'none');
     logLine(t('kajit'), 'info');
     refreshStatus();
+
+    const current = await GetVersion();
+    const ver = document.getElementById('ver');
+    ver.textContent = current;
+
+    const latest = await CheckUpdate().catch(() => '');
+    if (latest && latest !== current) {
+      ver.style.cursor = 'pointer';
+      ver.style.color = 'var(--accent)';
+      ver.title = latest;
+      ver.textContent = current + ' → ' + latest + ' ↑';
+      ver.addEventListener('click', () =>
+        BrowserOpenURL('https://github.com/Nospire/GDT-v2/releases/latest'));
+    }
 
   } catch (err) {
     logLine('init error: ' + err, 'err');

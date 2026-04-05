@@ -6,6 +6,10 @@ export function CancelModule() {
   return window['go']['main']['App']['CancelModule']();
 }
 
+export function CheckUpdate() {
+  return window['go']['main']['App']['CheckUpdate']();
+}
+
 export function GetLang() {
   return window['go']['main']['App']['GetLang']();
 }
@@ -24,6 +28,10 @@ export function GetSubscriptionURL() {
 
 export function GetSudoState() {
   return window['go']['main']['App']['GetSudoState']();
+}
+
+export function GetVersion() {
+  return window['go']['main']['App']['GetVersion']();
 }
 
 export function IsProxyRunning() {

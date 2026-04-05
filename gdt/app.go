@@ -177,6 +177,18 @@ func (a *App) SetSudoPassword(password string) error {
 	return a.sudo.SetPassword(password)
 }
 
+// ---- Version ---------------------------------------------------------------
+
+func (a *App) GetVersion() string { return AppVersion }
+
+func (a *App) CheckUpdate() string {
+	latest, err := status.CheckLatestVersion()
+	if err != nil {
+		return ""
+	}
+	return latest
+}
+
 // ---- Actions ---------------------------------------------------------------
 
 func (a *App) RunModule(id string) error {

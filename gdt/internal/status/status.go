@@ -3,6 +3,8 @@ package status
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,6 +19,21 @@ type SystemStatus struct {
 	OpenH264Ver    string // "2.5.1" или ""
 	TunnelActive   bool
 	TunnelCountry  string // "NL"
+}
+
+func CheckLatestVersion() (string, error) {
+	resp, err := http.Get("https://api.github.com/repos/Nospire/GDT-v2/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var data struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+	return data.TagName, nil
 }
 
 func Collect() (*SystemStatus, error) {

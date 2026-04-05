@@ -5,6 +5,8 @@ import {status} from '../models';
 
 export function CancelModule():Promise<void>;
 
+export function CheckUpdate():Promise<string>;
+
 export function GetLang():Promise<string>;
 
 export function GetModules():Promise<Array<config.Module>>;
@@ -14,6 +16,8 @@ export function GetStatus():Promise<status.SystemStatus>;
 export function GetSubscriptionURL():Promise<string>;
 
 export function GetSudoState():Promise<string>;
+
+export function GetVersion():Promise<string>;
 
 export function IsProxyRunning():Promise<boolean>;
 

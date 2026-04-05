@@ -79,12 +79,7 @@ if [[ "$PASSWD_STATUS" == "L" || "$PASSWD_STATUS" == "NP" ]]; then
 fi
 
 # ===== Check what needs to be done =====
-NEEDS_WEBKIT=false
 NEEDS_UPDATE=true
-
-if ! pacman -Q webkit2gtk-4.1 >/dev/null 2>&1; then
-    NEEDS_WEBKIT=true
-fi
 
 CURRENT_VER=""
 if [[ -f "$INSTALL_DIR/gdt" ]]; then
@@ -98,9 +93,17 @@ if [[ -n "$CURRENT_VER" && -n "$LATEST_VER" && "$CURRENT_VER" == "$LATEST_VER" ]
     NEEDS_UPDATE=false
 fi
 
-# ===== 4. Read sudo password (only if needed) =====
+# ===== 4. Check webkit (no sudo needed) =====
+if pacman -Q webkit2gtk-4.1 >/dev/null 2>&1; then
+    ok "$(msg "webkit2gtk-4.1 найден" "webkit2gtk-4.1 found")"
+    NEEDS_SUDO=false
+else
+    NEEDS_SUDO=true
+fi
+
+# ===== Ask sudo only if webkit missing =====
 GDT_SUDO_PASS=""
-if [[ "$NEEDS_WEBKIT" == "true" || "$NEEDS_UPDATE" == "true" ]]; then
+if [[ "$NEEDS_SUDO" == "true" ]]; then
     printf "[..] $(msg "Введите пароль sudo (ввод скрыт): " "Enter sudo password (hidden): ")"
     stty -echo </dev/tty
     IFS= read -r GDT_SUDO_PASS </dev/tty || true
@@ -121,8 +124,8 @@ if [[ "$NEEDS_WEBKIT" == "true" || "$NEEDS_UPDATE" == "true" ]]; then
     export GDT_SUDO_PASS
 fi
 
-# ===== 5. Check webkit2gtk-4.1 =====
-if [[ "$NEEDS_WEBKIT" == "true" ]]; then
+# ===== 5. Install webkit if needed =====
+if [[ "$NEEDS_SUDO" == "true" ]]; then
     msg "webkit2gtk-4.1 не найден. Устанавливаем..." \
         "webkit2gtk-4.1 not found. Installing..."
 
@@ -139,8 +142,6 @@ if [[ "$NEEDS_WEBKIT" == "true" ]]; then
     fi
 
     ok "$(msg "webkit2gtk-4.1 установлен" "webkit2gtk-4.1 installed")"
-else
-    ok "$(msg "webkit2gtk-4.1 найден" "webkit2gtk-4.1 found")"
 fi
 
 # ===== 6. Download binaries =====
@@ -206,3 +207,5 @@ echo ""
 # ===== 9. Launch GDT =====
 nohup "$INSTALL_DIR/gdt" >/dev/null 2>&1 &
 disown
+sleep 1
+exit 0
