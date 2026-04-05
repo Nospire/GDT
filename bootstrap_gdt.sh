@@ -78,41 +78,62 @@ if [[ "$PASSWD_STATUS" == "L" || "$PASSWD_STATUS" == "NP" ]]; then
     echo ""
 fi
 
-# ===== 4. Read sudo password =====
-printf "[..] $(msg "Введите пароль sudo (ввод скрыт): " "Enter sudo password (hidden): ")"
-stty -echo </dev/tty
-IFS= read -r GDT_SUDO_PASS </dev/tty || true
-stty echo </dev/tty
-printf "\n"
-
-if [[ -z "$GDT_SUDO_PASS" ]]; then
-    err "$(msg "Пустой пароль." "Empty password.")"
-    exit 1
-fi
-
-if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
-    err "$(msg "Неверный пароль sudo." "Wrong sudo password.")"
-    exit 1
-fi
-
-ok "$(msg "sudo активирован" "sudo activated")"
-export GDT_SUDO_PASS
-
-# ===== 5. Check webkit2gtk-4.1 =====
-info "$(msg "Проверяем webkit2gtk-4.1..." "Checking webkit2gtk-4.1...")"
+# ===== Check what needs to be done =====
+NEEDS_WEBKIT=false
+NEEDS_UPDATE=true
 
 if ! pacman -Q webkit2gtk-4.1 >/dev/null 2>&1; then
+    NEEDS_WEBKIT=true
+fi
+
+CURRENT_VER=""
+if [[ -f "$INSTALL_DIR/gdt" ]]; then
+    CURRENT_VER=$("$INSTALL_DIR/gdt" --version 2>/dev/null || echo "")
+fi
+
+LATEST_VER=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep '"tag_name"' | cut -d'"' -f4 || echo "")
+
+if [[ -n "$CURRENT_VER" && -n "$LATEST_VER" && "$CURRENT_VER" == "$LATEST_VER" ]]; then
+    NEEDS_UPDATE=false
+fi
+
+# ===== 4. Read sudo password (only if needed) =====
+GDT_SUDO_PASS=""
+if [[ "$NEEDS_WEBKIT" == "true" || "$NEEDS_UPDATE" == "true" ]]; then
+    printf "[..] $(msg "Введите пароль sudo (ввод скрыт): " "Enter sudo password (hidden): ")"
+    stty -echo </dev/tty
+    IFS= read -r GDT_SUDO_PASS </dev/tty || true
+    stty echo </dev/tty
+    printf "\n"
+
+    if [[ -z "$GDT_SUDO_PASS" ]]; then
+        err "$(msg "Пустой пароль." "Empty password.")"
+        exit 1
+    fi
+
+    if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' true >/dev/null 2>&1; then
+        err "$(msg "Неверный пароль sudo." "Wrong sudo password.")"
+        exit 1
+    fi
+
+    ok "$(msg "sudo активирован" "sudo activated")"
+    export GDT_SUDO_PASS
+fi
+
+# ===== 5. Check webkit2gtk-4.1 =====
+if [[ "$NEEDS_WEBKIT" == "true" ]]; then
     msg "webkit2gtk-4.1 не найден. Устанавливаем..." \
         "webkit2gtk-4.1 not found. Installing..."
 
-    # Enable dev mode (makes filesystem writable)
     if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' bash -c \
             'echo y | steamos-devmode enable' 2>&1 | tail -5; then
         err "$(msg "Не удалось включить режим разработчика." "Failed to enable dev mode.")"
         exit 1
     fi
 
-    if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' pacman -S --noconfirm --needed webkit2gtk-4.1 2>&1; then
+    if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' \
+            pacman -S --noconfirm --needed webkit2gtk-4.1 2>&1; then
         err "$(msg "Не удалось установить webkit2gtk-4.1." "Failed to install webkit2gtk-4.1.")"
         exit 1
     fi
@@ -123,25 +144,29 @@ else
 fi
 
 # ===== 6. Download binaries =====
-info "$(msg "Создаём ${INSTALL_DIR}..." "Creating ${INSTALL_DIR}...")"
-mkdir -p "$INSTALL_DIR/modules"
+if [[ "$NEEDS_UPDATE" == "false" ]]; then
+    ok "$(msg "GDT уже актуален ($LATEST_VER)" "GDT is up to date ($LATEST_VER)")"
+else
+    info "$(msg "Создаём ${INSTALL_DIR}..." "Creating ${INSTALL_DIR}...")"
+    mkdir -p "$INSTALL_DIR/modules"
 
-info "$(msg "Скачиваем gdt..." "Downloading gdt...")"
-curl -fsSL --progress-bar -o "$INSTALL_DIR/gdt" "${BASE_URL}/gdt"
-chmod +x "$INSTALL_DIR/gdt"
-ok "$(msg "gdt готов" "gdt ready")"
+    info "$(msg "Скачиваем gdt..." "Downloading gdt...")"
+    curl -fsSL --progress-bar -o "$INSTALL_DIR/gdt" "${BASE_URL}/gdt"
+    chmod +x "$INSTALL_DIR/gdt"
+    ok "$(msg "gdt готов" "gdt ready")"
 
-info "$(msg "Скачиваем sing-box..." "Downloading sing-box...")"
-curl -fsSL --progress-bar -o "$INSTALL_DIR/sing-box" "${BASE_URL}/sing-box"
-chmod +x "$INSTALL_DIR/sing-box"
-ok "$(msg "sing-box готов" "sing-box ready")"
+    info "$(msg "Скачиваем sing-box..." "Downloading sing-box...")"
+    curl -fsSL --progress-bar -o "$INSTALL_DIR/sing-box" "${BASE_URL}/sing-box"
+    chmod +x "$INSTALL_DIR/sing-box"
+    ok "$(msg "sing-box готов" "sing-box ready")"
 
-info "$(msg "Скачиваем модули..." "Downloading modules...")"
-for mod in steamos-update flatpak-update openh264-fix; do
-    curl -fsSL --progress-bar -o "$INSTALL_DIR/modules/${mod}" "${BASE_URL}/${mod}"
-    chmod +x "$INSTALL_DIR/modules/${mod}"
-    ok "$(msg "${mod} готов" "${mod} ready")"
-done
+    info "$(msg "Скачиваем модули..." "Downloading modules...")"
+    for mod in steamos-update flatpak-update openh264-fix; do
+        curl -fsSL --progress-bar -o "$INSTALL_DIR/modules/${mod}" "${BASE_URL}/${mod}"
+        chmod +x "$INSTALL_DIR/modules/${mod}"
+        ok "$(msg "${mod} готов" "${mod} ready")"
+    done
+fi
 
 # ===== 7. Config =====
 mkdir -p "$CONFIG_DIR"
@@ -167,6 +192,11 @@ Terminal=false
 Type=Application
 Categories=System;
 DESKTOP
+
+cp "${DESKTOP_DIR}/gdt.desktop" "${HOME}/Desktop/gdt.desktop" 2>/dev/null || true
+chmod +x "${HOME}/Desktop/gdt.desktop" 2>/dev/null || true
+update-desktop-database "${DESKTOP_DIR}" 2>/dev/null || true
+
 ok "$(msg "Ярлык создан" "Desktop entry created")"
 
 echo ""
@@ -174,4 +204,5 @@ ok "$(msg "Установка завершена. Запускаем GDT..." "In
 echo ""
 
 # ===== 9. Launch GDT =====
-"$INSTALL_DIR/gdt" &
+nohup "$INSTALL_DIR/gdt" >/dev/null 2>&1 &
+disown
