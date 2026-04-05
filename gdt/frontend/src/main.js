@@ -591,6 +591,45 @@ const mikePhrases = {
   ],
 };
 
+function showUpdateModal(latest, lang) {
+  if (document.getElementById('update-modal')) return;
+
+  const phrases = mikePhrases[lang] || mikePhrases.ru;
+  const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'sudo-overlay';
+  overlay.id = 'update-modal';
+  overlay.innerHTML = `
+    <div class="sudo-box" style="width:360px">
+      <div class="sudo-title">
+        ${lang === 'ru' ? 'Доступно обновление ' : 'Update available '} ${latest}
+      </div>
+      <div class="sudo-hint" style="font-style:italic;margin-bottom:20px">
+        "${phrase}"
+      </div>
+      <div class="sudo-hint">
+        ${lang === 'ru'
+          ? 'GDT закроется и запустится установщик обновления.'
+          : 'GDT will close and launch the updater.'}
+      </div>
+      <div class="sudo-btns">
+        <button class="sudo-cancel" id="upd-cancel">
+          ${lang === 'ru' ? 'Позже' : 'Later'}
+        </button>
+        <button class="sudo-ok" id="upd-ok">
+          ${lang === 'ru' ? 'Обновить' : 'Update'}
+        </button>
+      </div>
+    </div>`;
+
+  overlay.querySelector('#upd-cancel').onclick = () =>
+    document.body.removeChild(overlay);
+  overlay.querySelector('#upd-ok').onclick = () => LaunchUpdater();
+
+  document.body.appendChild(overlay);
+}
+
 async function checkAndShowUpdate() {
   const current = await GetVersion().catch(() => '');
   const ver = document.getElementById('ver');
@@ -604,41 +643,11 @@ async function checkAndShowUpdate() {
   ver.style.color = 'var(--accent)';
   ver.textContent = current + ' → ' + latest + ' ↑';
 
-  ver.addEventListener('click', () => {
-    const phrases = mikePhrases[lang] || mikePhrases.ru;
-    const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+  // Показываем попап сразу при старте
+  showUpdateModal(latest, lang);
 
-    const overlay = document.createElement('div');
-    overlay.className = 'sudo-overlay';
-    overlay.innerHTML = `
-      <div class="sudo-box" style="width:360px">
-        <div class="sudo-title">
-          ${lang === 'ru' ? 'Доступно обновление ' : 'Update available '} ${latest}
-        </div>
-        <div class="sudo-hint" style="font-style:italic;margin-bottom:20px">
-          "${phrase}"
-        </div>
-        <div class="sudo-hint">
-          ${lang === 'ru'
-            ? 'GDT закроется и запустится установщик обновления.'
-            : 'GDT will close and launch the updater.'}
-        </div>
-        <div class="sudo-btns">
-          <button class="sudo-cancel" id="upd-cancel">
-            ${lang === 'ru' ? 'Позже' : 'Later'}
-          </button>
-          <button class="sudo-ok" id="upd-ok">
-            ${lang === 'ru' ? 'Обновить' : 'Update'}
-          </button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-
-    overlay.querySelector('#upd-cancel').onclick = () =>
-      document.body.removeChild(overlay);
-
-    overlay.querySelector('#upd-ok').onclick = () => LaunchUpdater();
-  });
+  // И по клику на версию тоже
+  ver.addEventListener('click', () => showUpdateModal(latest, lang));
 }
 
 // ---- init -------------------------------------------------------------------
