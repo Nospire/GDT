@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Geekcom Deck Tools</title>
+</head>
+<body>
+<div id="app">
+
+  <div class="main">
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-section" id="sidebar-section">ДЕЙСТВИЯ</div>
+      <!-- module buttons injected by main.js -->
+      <button class="tavern-btn" id="btn-tavern">⌂ Geekcom Inn</button>
+    </div>
+
+    <div class="console" id="console-panel">
+      <div class="console-header">
+        <div class="console-title" id="console-title">ЛОГ</div>
+        <div class="console-actions">
+          <button class="c-btn" id="btn-copy">копировать</button>
+          <button class="c-btn" id="btn-export">экспорт</button>
+          <button class="c-btn" id="btn-clear">очистить</button>
+        </div>
+      </div>
+      <div class="log" id="log">
+        <div class="log-line log-dim">///////////////////////////////////////////////////</div>
+        <div class="log-line log-dim">  Geekcom Deck Tools · gdt.geekcom.org</div>
+        <div class="log-line log-dim">///////////////////////////////////////////////////</div>
+        <div class="log-line log-dim" style="margin-top:6px"></div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-row">
+          <span id="phase">ожидание</span>
+          <span id="pct">—</span>
+        </div>
+        <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+      </div>
+    </div>
+
+    <div class="statusbar" id="statusbar">
+      <div class="sb-section">СТАТУС</div>
+      <div id="sb-os" class="sb-item"></div>
+      <div id="sb-flatpak" class="sb-item"></div>
+      <div id="sb-openh264" class="sb-item"></div>
+      <div id="sb-tunnel" class="sb-item"></div>
+      <div class="sb-divider"></div>
+      <div class="sb-section">СООБЩЕСТВО</div>
+      <div class="sb-links">
+        <a data-url="https://t.me/geekcomdeck_news">Новости</a>
+        <a data-url="https://t.me/geekcom_deck_games">Игры</a>
+        <a data-url="https://t.me/Geekcom_hub">Чат</a>
+        <a data-url="https://boosty.to/steamdecks">Boosty</a>
+        <a data-url="https://github.com/nospire">GitHub</a>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- cancel bar — shown only when a module is running -->
+  <div class="cancel-bar" id="cancel-bar">
+    <button class="btn-cancel-big" id="btn-cancel">отмена</button>
+  </div>
+
+  <div class="bottom">
+    <div class="sudo-area">
+      <div class="sudo-dot" id="sudo-dot"></div>
+      <span class="sudo-label" id="sudo-label">нет пароля</span>
+      <button class="sudo-btn" id="btn-sudo">изменить</button>
+    </div>
+    <button class="lang-btn" id="btn-lang">RU</button>
+    <button class="theme-btn" id="btn-theme">◐ <span id="theme-label">Тема</span></button>
+    <div class="ver" id="ver">v1.0.0-alpha</div>
+  </div>
+
+  <!-- modal overlay -->
+  <div id="modal-overlay" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <div class="modal-title" id="modal-title"></div>
+      <div class="modal-hint"  id="modal-hint"></div>
+      <div class="modal-msg"   id="modal-msg"   style="display:none"></div>
+      <input class="modal-input" id="modal-input" type="text" style="display:none" />
+      <div class="modal-error" id="modal-error"></div>
+      <div class="modal-btns">
+        <button class="modal-cancel" id="modal-cancel">Отмена</button>
+        <button class="modal-ok"     id="modal-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script src="./src/main.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+lang: ru
+subscription_url: ""
+modules:
+  - id: steamos-update
+    label_ru: Обновить SteamOS
+    label_en: Update SteamOS
+    desc_ru: через VPN-туннель
+    desc_en: via VPN tunnel
+    icon: arrow-up
+    binary: modules/steamos-update
+    needs_sudo: true
+    needs_vpn: true
+  - id: flatpak-update
+    label_ru: Обновить Flatpak
+    label_en: Update Flatpak
+    desc_ru: все приложения
+    desc_en: all applications
+    icon: grid
+    binary: modules/flatpak-update
+    needs_sudo: true
+    needs_vpn: false
+  - id: openh264-fix
+    label_ru: Fix OpenH264
+    label_en: Fix OpenH264
+    desc_ru: ошибка 403 Flatpak
+    desc_en: Flatpak 403 error
+    icon: play
+    binary: modules/openh264-fix
+    needs_sudo: true
+    needs_vpn: true
+  - id: antizapret
+    label_ru: Antizapret
+    label_en: Antizapret
+    desc_ru: обход блокировок
+    desc_en: bypass blocks
+    icon: shield
+    binary: modules/antizapret
+    needs_sudo: false
+    needs_vpn: false
+  - id: proxy
+    label_ru: Прокси
+    label_en: Proxy
+    desc_ru: подписка rw.geekcom.org
+    desc_en: rw.geekcom.org subscription
+    icon: vpn
+    binary: ""
+    needs_sudo: false
+    needs_vpn: false

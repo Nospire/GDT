@@ -1,0 +1,9 @@
+go 1.26.1
+
+use (
+	./gdt
+	./modules/antizapret
+	./modules/flatpak-update
+	./modules/openh264-fix
+	./modules/steamos-update
+)

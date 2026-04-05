@@ -1,0 +1,20 @@
+# Wails build output
+gdt/build/
+gdt/frontend/node_modules/
+gdt/frontend/dist/
+
+# Go binaries
+gdt/gdt
+modules/steamos-update/steamos-update
+modules/flatpak-update/flatpak-update
+modules/openh264-fix/openh264-fix
+modules/antizapret/antizapret
+
+# Config with secrets
+gdt/internal/config/config.yaml
+
+# Release artifacts
+release/
+
+# OS
+.DS_Store
