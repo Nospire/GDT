@@ -81,7 +81,7 @@ func (a *App) GetStatus() (*status.SystemStatus, error) {
 func (a *App) getStatusNow() *status.SystemStatus {
 	s, _ := status.Collect()
 	if s != nil {
-		s.TunnelActive = a.singbox.IsRunning()
+		s.TunnelActive = a.singbox.IsRunning() || a.sessionID != ""
 	}
 	return s
 }

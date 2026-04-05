@@ -28,15 +28,6 @@ modules:
     binary: modules/openh264-fix
     needs_sudo: true
     needs_vpn: true
-  - id: antizapret
-    label_ru: Antizapret
-    label_en: Antizapret
-    desc_ru: обход блокировок
-    desc_en: bypass blocks
-    icon: shield
-    binary: modules/antizapret
-    needs_sudo: false
-    needs_vpn: false
   - id: proxy
     label_ru: Прокси
     label_en: Proxy
