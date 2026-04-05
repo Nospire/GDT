@@ -70,7 +70,7 @@ func done(rc int)      { fmt.Printf("DONE:%d\n", rc) }
 func fatal(msg string) { log("ОШИБКА: " + msg); done(1); os.Exit(1) }
 
 func runSudo(pass, cmd string, args ...string) ([]string, int) {
-	c := exec.Command("sudo", append([]string{"-S", "-k", "-p", "", "--", cmd}, args...)...)
+	c := exec.Command("sudo", append([]string{"-S", "-k", "-p", "", "-E", "--", cmd}, args...)...)
 	c.Stdin = strings.NewReader(pass + "\n")
 	out, err := c.Output()
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
@@ -84,7 +84,7 @@ func runSudo(pass, cmd string, args ...string) ([]string, int) {
 }
 
 func runSudoStream(pass, cmd string, args ...string) int {
-	c := exec.Command("sudo", append([]string{"-S", "-k", "-p", "", "--", cmd}, args...)...)
+	c := exec.Command("sudo", append([]string{"-S", "-k", "-p", "", "-E", "--", cmd}, args...)...)
 	c.Stdin = strings.NewReader(pass + "\n")
 	stdout, _ := c.StdoutPipe()
 	stderr, _ := c.StderrPipe()
