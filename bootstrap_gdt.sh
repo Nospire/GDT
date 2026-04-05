@@ -106,7 +106,8 @@ if ! ldconfig -p 2>/dev/null | grep -q 'webkit2gtk-4.1'; then
         "webkit2gtk-4.1 not found. Installing..."
 
     # Enable dev mode (makes filesystem writable)
-    if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' steamos-devmode enable >/dev/null 2>&1; then
+    if ! printf '%s\n' "$GDT_SUDO_PASS" | sudo -S -k -p '' bash -c \
+            'echo y | steamos-devmode enable' 2>&1 | tail -5; then
         err "$(msg "Не удалось включить режим разработчика." "Failed to enable dev mode.")"
         exit 1
     fi
